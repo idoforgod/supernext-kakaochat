@@ -1,4 +1,4 @@
-"use client";
+'use client';
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
@@ -10,9 +10,12 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Loader2 } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
+import { saveSession } from '@/lib/auth/session';
 
 export function LoginForm() {
   const router = useRouter();
+  const { toast } = useToast();
   const [isLoading, setIsLoading] = useState(false);
   const loginMutation = useLogin();
 
@@ -30,11 +33,29 @@ export function LoginForm() {
 
     try {
       const result = await loginMutation.mutateAsync(data);
+
+      // 세션 토큰 저장
+      saveSession(result.token);
+
+      // 성공 토스트 표시
+      toast({
+        title: '로그인 성공',
+        description: '환영합니다!',
+      });
+
+      // 리디렉션
       router.push(result.redirectTo);
     } catch (error: any) {
       setError('root', {
         type: 'manual',
         message: error.response?.data?.error?.message || '로그인에 실패했습니다.'
+      });
+
+      // 실패 토스트 표시
+      toast({
+        variant: 'destructive',
+        title: '로그인 실패',
+        description: error.response?.data?.error?.message || '로그인에 실패했습니다.',
       });
     } finally {
       setIsLoading(false);
@@ -93,6 +114,13 @@ export function LoginForm() {
             ) : null}
             로그인
           </Button>
+
+          <p className="text-center text-sm text-gray-600">
+            계정이 없으신가요?{' '}
+            <a href="/signup" className="text-primary hover:underline">
+              회원가입
+            </a>
+          </p>
         </div>
       </form>
     </div>
