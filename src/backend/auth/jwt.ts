@@ -1,4 +1,5 @@
 import jwt from 'jsonwebtoken';
+import { JWT_EXPIRES_IN } from '@/features/auth/constants/validation';
 
 export interface TokenPayload {
   userId: string;
@@ -13,7 +14,7 @@ export function createToken(payload: TokenPayload): string {
   }
 
   return jwt.sign(payload, secret, {
-    expiresIn: '7d',
+    expiresIn: JWT_EXPIRES_IN,
   });
 }
 

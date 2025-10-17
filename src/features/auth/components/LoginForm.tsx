@@ -12,6 +12,7 @@ import { Label } from '@/components/ui/label';
 import { Loader2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { saveSession } from '@/lib/auth/session';
+import { UI_TEXT } from '@/features/auth/constants/text';
 
 export function LoginForm() {
   const router = useRouter();
@@ -48,14 +49,14 @@ export function LoginForm() {
     } catch (error: any) {
       setError('root', {
         type: 'manual',
-        message: error.response?.data?.error?.message || '로그인에 실패했습니다.'
+        message: error.response?.data?.error?.message || UI_TEXT.UNKNOWN_ERROR
       });
 
       // 실패 토스트 표시
       toast({
         variant: 'destructive',
         title: '로그인 실패',
-        description: error.response?.data?.error?.message || '로그인에 실패했습니다.',
+        description: error.response?.data?.error?.message || UI_TEXT.UNKNOWN_ERROR,
       });
     } finally {
       setIsLoading(false);
@@ -112,13 +113,13 @@ export function LoginForm() {
             {isLoading ? (
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
             ) : null}
-            로그인
+            {UI_TEXT.LOGIN_BUTTON}
           </Button>
 
           <p className="text-center text-sm text-gray-600">
-            계정이 없으신가요?{' '}
+            {UI_TEXT.NO_ACCOUNT_YET}{' '}
             <a href="/signup" className="text-primary hover:underline">
-              회원가입
+              {UI_TEXT.SIGNUP_LINK}
             </a>
           </p>
         </div>

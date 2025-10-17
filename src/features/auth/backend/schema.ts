@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PASSWORD_MIN_LENGTH, NICKNAME_MIN_LENGTH, NICKNAME_MAX_LENGTH } from '../constants/validation';
 
 export const LoginRequestSchema = z.object({
   email: z
@@ -7,7 +8,7 @@ export const LoginRequestSchema = z.object({
     .email({ message: '올바른 이메일 형식이 아닙니다.' }),
   password: z
     .string({ required_error: '비밀번호를 입력해주세요.' })
-    .min(8, { message: '비밀번호는 최소 8자 이상이어야 합니다.' }),
+    .min(PASSWORD_MIN_LENGTH, { message: `비밀번호는 최소 ${PASSWORD_MIN_LENGTH}자 이상이어야 합니다.` }),
 });
 
 export const LoginResponseSchema = z.object({
@@ -41,18 +42,18 @@ export const SignupRequestSchema = z
   .object({
     nickname: z
       .string({ required_error: '닉네임을 입력해주세요.' })
-      .min(2, { message: '닉네임은 최소 2자 이상이어야 합니다.' })
-      .max(50, { message: '닉네임은 최대 50자까지 가능합니다.' }),
+      .min(NICKNAME_MIN_LENGTH, { message: `닉네임은 최소 ${NICKNAME_MIN_LENGTH}자 이상이어야 합니다.` })
+      .max(NICKNAME_MAX_LENGTH, { message: `닉네임은 최대 ${NICKNAME_MAX_LENGTH}자까지 가능합니다.` }),
     email: z
       .string({ required_error: '이메일을 입력해주세요.' })
       .min(1, { message: '이메일을 입력해주세요.' })
       .email({ message: '올바른 이메일 형식이 아닙니다.' }),
     password: z
       .string({ required_error: '비밀번호를 입력해주세요.' })
-      .min(8, { message: '비밀번호는 최소 8자 이상이어야 합니다.' }),
+      .min(PASSWORD_MIN_LENGTH, { message: `비밀번호는 최소 ${PASSWORD_MIN_LENGTH}자 이상이어야 합니다.` }),
     passwordConfirm: z
       .string({ required_error: '비밀번호 확인을 입력해주세요.' })
-      .min(8, { message: '비밀번호 확인은 최소 8자 이상이어야 합니다.' }),
+      .min(PASSWORD_MIN_LENGTH, { message: `비밀번호 확인은 최소 ${PASSWORD_MIN_LENGTH}자 이상이어야 합니다.` }),
   })
   .refine((data) => data.password === data.passwordConfirm, {
     message: '비밀번호가 일치하지 않습니다.',

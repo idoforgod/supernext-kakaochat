@@ -4,6 +4,8 @@ import { createToken } from '@/backend/auth/jwt';
 import { AuthErrorCode } from './error';
 import type { AppContext } from '@/backend/hono/context';
 import { success, failure, type HandlerResult } from '@/backend/http/response';
+import { BCRYPT_SALT_ROUNDS } from '../constants/validation';
+import { USER_STATUS } from '../constants/user-status';
 
 export interface LoginParams {
   email: string;
@@ -35,7 +37,7 @@ export async function loginService(
     }
 
     // 2. 계정 상태 확인
-    if (user.status !== 'active') {
+    if (user.status !== USER_STATUS.ACTIVE) {
       logger.warn(`Login attempt for inactive account: ${email}, status: ${user.status}`);
       return {
         success: false,
@@ -43,7 +45,7 @@ export async function loginService(
           code: AuthErrorCode.ACCOUNT_INACTIVE.code,
           statusCode: AuthErrorCode.ACCOUNT_INACTIVE.statusCode,
           message:
-            user.status === 'pending'
+            user.status === USER_STATUS.PENDING
               ? AuthErrorCode.ACCOUNT_INACTIVE.messages.pending
               : AuthErrorCode.ACCOUNT_INACTIVE.messages.inactive,
         },
@@ -144,7 +146,7 @@ export async function signupService(
     }
 
     // 3. 비밀번호 해싱
-    const passwordHash = await bcrypt.hash(password, 10);
+    const passwordHash = await bcrypt.hash(password, BCRYPT_SALT_ROUNDS);
 
     // 4. 사용자 생성
     const { data: newUser, error: insertError } = await supabase
@@ -153,7 +155,7 @@ export async function signupService(
         nickname,
         email,
         password_hash: passwordHash,
-        status: 'pending',
+        status: USER_STATUS.PENDING,
       })
       .select('id, email')
       .single();

@@ -7,6 +7,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { useSignup } from '@/features/auth/hooks/useSignup';
 import { useToast } from '@/hooks/use-toast';
+import { UI_TEXT } from '@/features/auth/constants/text';
+import { REDIRECT_DELAY_MS } from '@/features/auth/constants/validation';
 
 export function SignupForm() {
   const router = useRouter();
@@ -47,7 +49,7 @@ export function SignupForm() {
         });
         setTimeout(() => {
           router.push(data.redirectTo);
-        }, 2000);
+        }, REDIRECT_DELAY_MS);
       },
       onError: (error: any) => {
         toast({
@@ -56,7 +58,7 @@ export function SignupForm() {
           description:
             error.response?.data?.error?.message ||
             error.message ||
-            '알 수 없는 오류가 발생했습니다.',
+            UI_TEXT.UNKNOWN_ERROR,
         });
       },
     });
@@ -73,7 +75,7 @@ export function SignupForm() {
           onChange={(e) =>
             setFormData({ ...formData, nickname: e.target.value })
           }
-          placeholder="2~50자"
+          placeholder={UI_TEXT.PLACEHOLDER_NICKNAME}
           required
           disabled={isPending}
         />
@@ -89,7 +91,7 @@ export function SignupForm() {
           type="email"
           value={formData.email}
           onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-          placeholder="example@email.com"
+          placeholder={UI_TEXT.PLACEHOLDER_EMAIL}
           required
           disabled={isPending}
         />
@@ -107,7 +109,7 @@ export function SignupForm() {
           onChange={(e) =>
             setFormData({ ...formData, password: e.target.value })
           }
-          placeholder="최소 8자"
+          placeholder={UI_TEXT.PLACEHOLDER_PASSWORD}
           required
           disabled={isPending}
         />
@@ -125,7 +127,7 @@ export function SignupForm() {
           onChange={(e) =>
             setFormData({ ...formData, passwordConfirm: e.target.value })
           }
-          placeholder="비밀번호 재입력"
+          placeholder={UI_TEXT.PLACEHOLDER_PASSWORD_CONFIRM}
           required
           disabled={isPending}
         />
@@ -135,13 +137,13 @@ export function SignupForm() {
       </div>
 
       <Button type="submit" className="w-full" disabled={isPending}>
-        {isPending ? '처리 중...' : '회원가입'}
+        {isPending ? UI_TEXT.SIGNUP_BUTTON_PENDING : UI_TEXT.SIGNUP_BUTTON_DEFAULT}
       </Button>
 
       <p className="text-center text-sm text-gray-600">
-        이미 계정이 있으신가요?{' '}
+        {UI_TEXT.ALREADY_HAVE_ACCOUNT}{' '}
         <a href="/login" className="text-primary hover:underline">
-          로그인
+          {UI_TEXT.LOGIN_BUTTON}
         </a>
       </p>
     </form>
