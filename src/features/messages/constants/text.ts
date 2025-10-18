@@ -21,8 +21,18 @@ export const MESSAGE_UI_TEXT = {
   // Buttons
   BUTTON_RETRY: '다시 시도',
   BUTTON_BACK_TO_ROOMS: '채팅방 목록으로',
+  BUTTON_SEND: '전송',
 
   // Connection status
   CONNECTION_CONNECTED: '연결됨',
   CONNECTION_DISCONNECTED: '연결 끊김',
+
+  // Input
+  INPUT_PLACEHOLDER: '메시지를 입력하세요...',
+  INPUT_SENDING: '전송 중...',
+
+  // Send errors
+  ERROR_SEND_FAILED: '메시지 전송에 실패했습니다. 다시 시도해주세요.',
+  ERROR_MESSAGE_TOO_LONG: '메시지가 너무 깁니다. 2000자 이내로 작성해주세요.',
+  ERROR_MESSAGE_EMPTY: '메시지 내용을 입력해주세요.',
 } as const;

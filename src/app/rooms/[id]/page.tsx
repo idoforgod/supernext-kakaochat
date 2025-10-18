@@ -7,6 +7,7 @@ import { useRoomDetails } from '@/features/chat-rooms/hooks/useRoomDetails';
 import { useMessages } from '@/features/messages/hooks/useMessages';
 import { useRealtimeMessages } from '@/features/messages/hooks/useRealtimeMessages';
 import { MessageList } from '@/features/messages/components/MessageList';
+import { MessageInput } from '@/features/messages/components/MessageInput';
 import { useToast } from '@/hooks/use-toast';
 import { MESSAGE_UI_TEXT } from '@/features/messages/constants/text';
 import type { Message } from '@/features/messages/lib/dto';
@@ -155,12 +156,8 @@ export default function RoomPage({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input placeholder */}
-      <div className="bg-white border-t px-6 py-4">
-        <p className="text-gray-500 text-center text-sm">
-          메시지 입력 기능은 다음 유스케이스에서 구현됩니다.
-        </p>
-      </div>
+      {/* Message Input */}
+      <MessageInput roomId={roomId} />
     </div>
   );
 }
