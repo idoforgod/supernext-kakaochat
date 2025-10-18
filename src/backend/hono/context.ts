@@ -14,6 +14,8 @@ export type AppVariables = {
   supabase: SupabaseClient;
   logger: AppLogger;
   config: AppConfig;
+  userId?: string;
+  userEmail?: string;
 };
 
 export type AppEnv = {
@@ -26,7 +28,7 @@ export const contextKeys = {
   supabase: 'supabase',
   logger: 'logger',
   config: 'config',
-} as const satisfies Record<keyof AppVariables, keyof AppVariables>;
+} as const;
 
 export const getSupabase = (c: AppContext) =>
   c.get(contextKeys.supabase) as SupabaseClient;
