@@ -44,4 +44,11 @@ export const ChatRoomErrorCode = {
     statusCode: 500,
     message: '채팅방 생성 중 오류가 발생했습니다.',
   },
+
+  // 채팅방 없음 (404)
+  ROOM_NOT_FOUND: {
+    code: 'ROOM_NOT_FOUND',
+    statusCode: 404,
+    message: '채팅방을 찾을 수 없습니다.',
+  },
 } as const;

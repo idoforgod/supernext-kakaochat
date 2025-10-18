@@ -71,3 +71,42 @@ export async function createRoomService(
     );
   }
 }
+
+export async function getRoomDetailService(
+  roomId: number,
+  c: AppContext
+): Promise<HandlerResult<{ id: number; name: string; creatorId: number; createdAt: string }, string>> {
+  const supabase = c.get('supabase');
+  const logger = c.get('logger');
+
+  try {
+    const { data: room, error } = await supabase
+      .from('chat_rooms')
+      .select('id, name, creator_id, created_at')
+      .eq('id', roomId)
+      .maybeSingle();
+
+    if (error || !room) {
+      logger.warn(`Room not found: ${roomId}`);
+      return failure(
+        ChatRoomErrorCode.ROOM_NOT_FOUND.statusCode,
+        ChatRoomErrorCode.ROOM_NOT_FOUND.code,
+        ChatRoomErrorCode.ROOM_NOT_FOUND.message
+      );
+    }
+
+    return success({
+      id: room.id,
+      name: room.name,
+      creatorId: room.creator_id,
+      createdAt: room.created_at,
+    });
+  } catch (err) {
+    logger.error('Unexpected error during room detail fetch', err);
+    return failure(
+      ChatRoomErrorCode.INTERNAL_SERVER_ERROR.statusCode,
+      ChatRoomErrorCode.INTERNAL_SERVER_ERROR.code,
+      ChatRoomErrorCode.INTERNAL_SERVER_ERROR.message
+    );
+  }
+}

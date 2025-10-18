@@ -31,3 +31,17 @@ export const CreateRoomErrorSchema = z.object({
 export type CreateRoomRequest = z.infer<typeof CreateRoomRequestSchema>;
 export type CreateRoomResponse = z.infer<typeof CreateRoomResponseSchema>;
 export type CreateRoomError = z.infer<typeof CreateRoomErrorSchema>;
+
+// === 채팅방 상세 조회 관련 스키마 ===
+
+export const RoomDetailResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    id: z.number(),
+    name: z.string(),
+    creatorId: z.number(),
+    createdAt: z.string().datetime(),
+  }),
+});
+
+export type RoomDetailResponse = z.infer<typeof RoomDetailResponseSchema>;
