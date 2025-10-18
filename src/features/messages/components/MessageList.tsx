@@ -20,18 +20,14 @@ export function MessageList({ messages, currentUserId, onReply }: MessageListPro
     );
   }
 
-  const getParentMessage = (parentId: number | null) => {
-    if (!parentId) return null;
-    return messages.find((msg) => msg.id === parentId);
-  };
-
   return (
     <div className="flex flex-col space-y-4 p-4">
       {messages.map((message) => {
         const isOwnMessage = currentUserId && message.userId.toString() === currentUserId;
-        const parentMessage = getParentMessage(message.parentMessageId);
         // Optimistic 메시지 여부 확인 (id가 string이면 임시 메시지)
         const isOptimistic = typeof message.id === 'string';
+        // parentMessage는 backend에서 JOIN으로 가져온 정보 사용
+        const parentMessage = message.parentMessage;
 
         return (
           <div

@@ -32,6 +32,15 @@ export const MessageSchema = z.object({
   }),
   content: z.string(),
   parentMessageId: z.number().nullable(),
+  parentMessage: z.object({
+    id: z.number(),
+    content: z.string(),
+    createdAt: z.string().datetime(),
+    user: z.object({
+      id: z.number(),
+      nickname: z.string(),
+    }),
+  }).nullable().optional(),
   createdAt: z.string().datetime(),
   reactionCount: z.number().optional().default(0),
   hasUserReacted: z.boolean().optional().default(false),

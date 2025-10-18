@@ -44,6 +44,15 @@ export async function getMessagesService(
         users!inner (
           id,
           nickname
+        ),
+        parent:messages!parent_message_id (
+          id,
+          content,
+          created_at,
+          user:users!inner (
+            id,
+            nickname
+          )
         )
       `
       )
@@ -97,6 +106,19 @@ export async function getMessagesService(
           }
         }
 
+        // parent_message 정보 추출
+        const parentMessage = msg.parent
+          ? {
+              id: msg.parent.id,
+              content: msg.parent.content,
+              createdAt: msg.parent.created_at,
+              user: {
+                id: msg.parent.user.id,
+                nickname: msg.parent.user.nickname,
+              },
+            }
+          : null;
+
         return {
           id: msg.id,
           roomId: msg.room_id,
@@ -107,6 +129,7 @@ export async function getMessagesService(
           },
           content: msg.content,
           parentMessageId: msg.parent_message_id,
+          parentMessage,
           createdAt: msg.created_at,
           reactionCount: reactionCount || 0,
           hasUserReacted,
