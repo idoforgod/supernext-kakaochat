@@ -33,6 +33,8 @@ export const MessageSchema = z.object({
   content: z.string(),
   parentMessageId: z.number().nullable(),
   createdAt: z.string().datetime(),
+  reactionCount: z.number().optional().default(0),
+  hasUserReacted: z.boolean().optional().default(false),
 });
 
 export const GetMessagesResponseSchema = z.object({
@@ -70,3 +72,17 @@ export const SendMessageResponseSchema = z.object({
 
 export type SendMessageBody = z.infer<typeof SendMessageBodySchema>;
 export type SendMessageResponse = z.infer<typeof SendMessageResponseSchema>;
+
+// === 메시지 반응 관련 스키마 ===
+
+export const ToggleReactionResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    messageId: z.number(),
+    reactionType: z.string(),
+    totalCount: z.number(),
+    isActive: z.boolean(),
+  }),
+});
+
+export type ToggleReactionResponse = z.infer<typeof ToggleReactionResponseSchema>;

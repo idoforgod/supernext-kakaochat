@@ -3,6 +3,7 @@
 import { Reply } from 'lucide-react';
 import type { Message } from '@/features/messages/lib/dto';
 import { MESSAGE_UI_TEXT } from '@/features/messages/constants/text';
+import { ReactionButton } from './ReactionButton';
 
 interface MessageListProps {
   messages: Message[];
@@ -84,21 +85,31 @@ export function MessageList({ messages, currentUserId, onReply }: MessageListPro
                   })}
                 </p>
 
-                {/* 답장 버튼 */}
-                {onReply && (
-                  <button
-                    type="button"
-                    onClick={() => onReply(message)}
-                    className={`ml-2 rounded p-1 transition-colors ${
-                      isOwnMessage
-                        ? 'text-white/70 hover:bg-white/20 hover:text-white'
-                        : 'text-gray-400 hover:bg-gray-200 hover:text-gray-600'
-                    }`}
-                    aria-label={MESSAGE_UI_TEXT.REPLY_TO}
-                  >
-                    <Reply className="h-3 w-3" />
-                  </button>
-                )}
+                <div className="flex items-center gap-1">
+                  {/* 반응 버튼 */}
+                  <ReactionButton
+                    messageId={message.id}
+                    initialCount={message.reactionCount || 0}
+                    initialIsActive={message.hasUserReacted || false}
+                    isOwnMessage={isOwnMessage}
+                  />
+
+                  {/* 답장 버튼 */}
+                  {onReply && (
+                    <button
+                      type="button"
+                      onClick={() => onReply(message)}
+                      className={`rounded p-1 transition-colors ${
+                        isOwnMessage
+                          ? 'text-white/70 hover:bg-white/20 hover:text-white'
+                          : 'text-gray-400 hover:bg-gray-200 hover:text-gray-600'
+                      }`}
+                      aria-label={MESSAGE_UI_TEXT.REPLY_TO}
+                    >
+                      <Reply className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>

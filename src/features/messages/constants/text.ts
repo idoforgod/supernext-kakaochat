@@ -42,4 +42,9 @@ export const MESSAGE_UI_TEXT = {
   REPLY_TO: '님에게 답장',
   REPLY_CANCEL: '취소',
   REPLYING_TO: '답장 대상',
+
+  // Reaction
+  REACTION_LIKE: '좋아요',
+  ERROR_REACTION_FAILED: '반응 처리에 실패했습니다. 다시 시도해주세요.',
+  ERROR_MESSAGE_NOT_FOUND: '메시지를 찾을 수 없습니다. 페이지를 새로고침해주세요.',
 } as const;

@@ -26,6 +26,10 @@ export async function getMessagesService(
   const supabase = c.get('supabase');
   const logger = c.get('logger');
 
+  // 현재 사용자 ID 가져오기 (인증되지 않은 경우 null)
+  const userIdStr = c.get('userId');
+  const currentUserId = userIdStr ? parseInt(userIdStr, 10) : null;
+
   try {
     let query = supabase
       .from('messages')
@@ -63,31 +67,194 @@ export async function getMessagesService(
     }
 
     const hasMore = messagesData.length > limit;
-    const messages = (hasMore ? messagesData.slice(0, limit) : messagesData).map((msg: any) => ({
-      id: msg.id,
-      roomId: msg.room_id,
-      userId: msg.user_id,
-      user: {
-        id: msg.users.id,
-        nickname: msg.users.nickname,
-      },
-      content: msg.content,
-      parentMessageId: msg.parent_message_id,
-      createdAt: msg.created_at,
-    }));
+    const messageSlice = hasMore ? messagesData.slice(0, limit) : messagesData;
+
+    // 각 메시지에 대한 반응 정보 조회
+    const messagesWithReactions = await Promise.all(
+      messageSlice.map(async (msg: any) => {
+        // 총 반응 개수 조회
+        const { count: reactionCount, error: countError } = await supabase
+          .from('message_reactions')
+          .select('*', { count: 'exact', head: true })
+          .eq('message_id', msg.id);
+
+        if (countError) {
+          logger.error('Failed to count reactions', { messageId: msg.id, error: countError });
+        }
+
+        // 현재 사용자의 반응 여부 조회
+        let hasUserReacted = false;
+        if (currentUserId) {
+          const { data: userReaction, error: reactionError } = await supabase
+            .from('message_reactions')
+            .select('*')
+            .eq('message_id', msg.id)
+            .eq('user_id', currentUserId)
+            .maybeSingle();
+
+          if (!reactionError && userReaction) {
+            hasUserReacted = true;
+          }
+        }
+
+        return {
+          id: msg.id,
+          roomId: msg.room_id,
+          userId: msg.user_id,
+          user: {
+            id: msg.users.id,
+            nickname: msg.users.nickname,
+          },
+          content: msg.content,
+          parentMessageId: msg.parent_message_id,
+          createdAt: msg.created_at,
+          reactionCount: reactionCount || 0,
+          hasUserReacted,
+        };
+      })
+    );
 
     // 최신순으로 정렬 (DB에서는 내림차순으로 가져오지만 클라이언트에는 오름차순으로)
-    messages.reverse();
+    messagesWithReactions.reverse();
 
     return success({
-      messages,
+      messages: messagesWithReactions,
       pagination: {
-        total: messages.length,
+        total: messagesWithReactions.length,
         hasMore,
       },
     });
   } catch (err) {
     logger.error('Unexpected error during message fetch', err);
+    return failure(
+      MessageErrorCode.INTERNAL_SERVER_ERROR.statusCode,
+      MessageErrorCode.INTERNAL_SERVER_ERROR.code,
+      MessageErrorCode.INTERNAL_SERVER_ERROR.message
+    );
+  }
+}
+
+export interface ToggleReactionParams {
+  messageId: number;
+  userId: number;
+  reactionType: string;
+}
+
+export interface ToggleReactionResult {
+  messageId: number;
+  reactionType: string;
+  totalCount: number;
+  isActive: boolean;
+}
+
+export async function toggleReactionService(
+  params: ToggleReactionParams,
+  c: AppContext
+): Promise<HandlerResult<ToggleReactionResult, string>> {
+  const { messageId, userId, reactionType } = params;
+  const supabase = c.get('supabase');
+  const logger = c.get('logger');
+
+  try {
+    // 1. 메시지 존재 여부 확인
+    const { data: message, error: messageError } = await supabase
+      .from('messages')
+      .select('id')
+      .eq('id', messageId)
+      .maybeSingle();
+
+    if (messageError || !message) {
+      logger.error('Message not found', { messageId, error: messageError });
+      return failure(
+        MessageErrorCode.MESSAGE_NOT_FOUND.statusCode,
+        MessageErrorCode.MESSAGE_NOT_FOUND.code,
+        MessageErrorCode.MESSAGE_NOT_FOUND.message
+      );
+    }
+
+    // 2. 기존 반응 확인
+    const { data: existingReaction, error: selectError } = await supabase
+      .from('message_reactions')
+      .select('*')
+      .eq('message_id', messageId)
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    if (selectError) {
+      logger.error('Failed to check existing reaction', { error: selectError });
+      return failure(
+        MessageErrorCode.REACTION_TOGGLE_FAILED.statusCode,
+        MessageErrorCode.REACTION_TOGGLE_FAILED.code,
+        MessageErrorCode.REACTION_TOGGLE_FAILED.message
+      );
+    }
+
+    let isActive: boolean;
+
+    // 3. 반응 토글 (있으면 삭제, 없으면 추가)
+    if (existingReaction) {
+      // 기존 반응 삭제
+      const { error: deleteError } = await supabase
+        .from('message_reactions')
+        .delete()
+        .eq('message_id', messageId)
+        .eq('user_id', userId);
+
+      if (deleteError) {
+        logger.error('Failed to delete reaction', { error: deleteError });
+        return failure(
+          MessageErrorCode.REACTION_TOGGLE_FAILED.statusCode,
+          MessageErrorCode.REACTION_TOGGLE_FAILED.code,
+          MessageErrorCode.REACTION_TOGGLE_FAILED.message
+        );
+      }
+
+      isActive = false;
+    } else {
+      // 새로운 반응 추가
+      const { error: insertError } = await supabase
+        .from('message_reactions')
+        .insert({
+          message_id: messageId,
+          user_id: userId,
+          reaction: reactionType,
+        });
+
+      if (insertError) {
+        logger.error('Failed to insert reaction', { error: insertError });
+        return failure(
+          MessageErrorCode.REACTION_TOGGLE_FAILED.statusCode,
+          MessageErrorCode.REACTION_TOGGLE_FAILED.code,
+          MessageErrorCode.REACTION_TOGGLE_FAILED.message
+        );
+      }
+
+      isActive = true;
+    }
+
+    // 4. 총 반응 개수 조회
+    const { count, error: countError } = await supabase
+      .from('message_reactions')
+      .select('*', { count: 'exact', head: true })
+      .eq('message_id', messageId);
+
+    if (countError) {
+      logger.error('Failed to count reactions', { error: countError });
+      return failure(
+        MessageErrorCode.REACTION_TOGGLE_FAILED.statusCode,
+        MessageErrorCode.REACTION_TOGGLE_FAILED.code,
+        MessageErrorCode.REACTION_TOGGLE_FAILED.message
+      );
+    }
+
+    return success({
+      messageId,
+      reactionType,
+      totalCount: count || 0,
+      isActive,
+    });
+  } catch (err) {
+    logger.error('Unexpected error during reaction toggle', err);
     return failure(
       MessageErrorCode.INTERNAL_SERVER_ERROR.statusCode,
       MessageErrorCode.INTERNAL_SERVER_ERROR.code,

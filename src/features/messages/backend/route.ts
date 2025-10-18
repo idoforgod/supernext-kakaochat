@@ -4,7 +4,7 @@ import type { AppEnv } from '@/backend/hono/context';
 import { respond } from '@/backend/http/response';
 import { authMiddleware } from '@/backend/middleware/auth';
 import { GetMessagesQuerySchema, SendMessageBodySchema } from './schema';
-import { getMessagesService, sendMessageService } from './service';
+import { getMessagesService, sendMessageService, toggleReactionService } from './service';
 
 export const messageRoute = new Hono<AppEnv>()
   .get(
@@ -84,6 +84,64 @@ export const messageRoute = new Hono<AppEnv>()
 
       const result = await sendMessageService(
         { roomId, content, userId, parentMessageId },
+        c
+      );
+
+      return respond(c, result);
+    }
+  )
+  .post(
+    '/api/messages/:messageId/reactions',
+    authMiddleware,
+    async (c) => {
+      const messageIdStr = c.req.param('messageId');
+      const messageId = parseInt(messageIdStr, 10);
+
+      if (isNaN(messageId)) {
+        return c.json(
+          {
+            success: false,
+            error: {
+              code: 'VALIDATION_ERROR',
+              message: '유효하지 않은 메시지 ID입니다.',
+            },
+          },
+          400
+        );
+      }
+
+      const userIdStr = c.get('userId');
+
+      if (!userIdStr) {
+        return c.json(
+          {
+            success: false,
+            error: {
+              code: 'UNAUTHORIZED',
+              message: '로그인이 필요합니다.',
+            },
+          },
+          401
+        );
+      }
+
+      const userId = parseInt(userIdStr, 10);
+
+      if (isNaN(userId)) {
+        return c.json(
+          {
+            success: false,
+            error: {
+              code: 'UNAUTHORIZED',
+              message: '유효하지 않은 사용자 ID입니다.',
+            },
+          },
+          401
+        );
+      }
+
+      const result = await toggleReactionService(
+        { messageId, userId, reactionType: 'like' },
         c
       );
 

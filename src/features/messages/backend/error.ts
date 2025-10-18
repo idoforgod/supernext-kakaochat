@@ -58,4 +58,18 @@ export const MessageErrorCode = {
     statusCode: 500,
     message: '서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.',
   },
+
+  // 메시지를 찾을 수 없음 (404)
+  MESSAGE_NOT_FOUND: {
+    code: 'MESSAGE_NOT_FOUND',
+    statusCode: 404,
+    message: '메시지를 찾을 수 없습니다.',
+  },
+
+  // 반응 처리 실패 (500)
+  REACTION_TOGGLE_FAILED: {
+    code: 'REACTION_TOGGLE_FAILED',
+    statusCode: 500,
+    message: '반응 처리에 실패했습니다. 잠시 후 다시 시도해주세요.',
+  },
 } as const;
