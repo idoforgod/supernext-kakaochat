@@ -1436,7 +1436,603 @@ export const ReplyIndicator = ({
 
 ---
 
-## 13. 구현 우선순위
+## 13. Context + useReducer 아키텍처 설계
+
+### 13.1 Context 아키텍처 개요
+
+**설계 원칙**:
+- Context는 답장 기능 관련 상태와 액션만 관리 (Single Responsibility)
+- Provider는 ChatRoomPage 레벨에서 제공하여 모든 하위 컴포넌트에서 접근 가능
+- useReducer로 복잡한 상태 로직을 중앙 집중화
+- WebSocket, React Query와의 통합은 Provider 내부에서 처리
+- Context 소비자는 필요한 상태/액션만 선택적으로 구독
+
+**계층 구조**:
+```
+<ChatRoomPage>
+  <ReplyProvider>  ← Context Provider
+    <MessageList>
+      <MessageItem>
+        <ReplyButton />  ← useReplyContext()
+        <ReplyIndicator />  ← useReplyContext()
+    <MessageInputArea>
+      <ReplyTargetPreview />  ← useReplyContext()
+      <MessageTextarea />  ← useReplyContext()
+      <SendButton />  ← useReplyContext()
+```
+
+---
+
+### 13.2 Context Provider 데이터 흐름
+
+#### 13.2.1 초기화 및 생명주기
+
+```mermaid
+graph TD
+    A[ReplyProvider 마운트] --> B[useReducer 초기화]
+    B --> C[initialReplyState 설정]
+
+    C --> D[WebSocket 연결]
+    D --> E[이벤트 리스너 등록]
+    E --> F{Provider Ready}
+
+    F --> G[하위 컴포넌트 렌더링]
+    G --> H[useReplyContext 호출]
+
+    H --> I[Context 값 구독]
+    I --> J[상태 변경 감지]
+    J --> K[컴포넌트 리렌더링]
+
+    K --> L{Provider 언마운트?}
+    L -->|No| I
+    L -->|Yes| M[이벤트 리스너 해제]
+    M --> N[WebSocket 연결 정리]
+    N --> O[Provider 종료]
+
+    style A fill:#e1f5ff
+    style F fill:#e7f5e7
+    style O fill:#f0f0f0
+```
+
+#### 13.2.2 액션 디스패치 및 상태 업데이트 흐름
+
+```mermaid
+graph TD
+    A[사용자 인터랙션<br/>예: 답장 버튼 클릭] --> B[컴포넌트에서<br/>Context 액션 호출]
+    B --> C[setReplyTarget 함수]
+
+    C --> D[dispatch<br/>SET_REPLY_TARGET]
+    D --> E[Reducer 실행]
+    E --> F[State 업데이트]
+
+    F --> G[Context Value 변경]
+    G --> H[구독 중인 컴포넌트<br/>리렌더링 트리거]
+
+    H --> I1[MessageInputArea<br/>미리보기 표시]
+    H --> I2[MessageItem<br/>UI 상태 업데이트]
+    H --> I3[SendButton<br/>활성화 상태 변경]
+
+    I1 --> J[Side Effect 실행<br/>예: 입력 필드 포커스]
+
+    style A fill:#e1f5ff
+    style D fill:#fff4e6
+    style F fill:#ffe6b3
+    style G fill:#e7f5e7
+```
+
+#### 13.2.3 WebSocket 이벤트 처리 흐름
+
+```mermaid
+graph TD
+    A[WebSocket Event<br/>NEW_REPLY_MESSAGE] --> B[Provider 이벤트 리스너]
+    B --> C[이벤트 데이터 검증]
+
+    C --> D{현재 roomId와 일치?}
+    D -->|No| E[이벤트 무시]
+    D -->|Yes| F[dispatch<br/>RECEIVE_REPLY_MESSAGE]
+
+    F --> G[Reducer 실행]
+    G --> H[optimisticMessages에서<br/>매칭 메시지 제거]
+
+    H --> I[React Query Cache 업데이트]
+    I --> J[messages 배열에<br/>서버 메시지 추가]
+
+    J --> K[Context Value 변경]
+    K --> L[MessageList<br/>리렌더링]
+
+    L --> M[새 답장 메시지 표시<br/>원본 인용 포함]
+
+    style A fill:#e1f5ff
+    style F fill:#fff4e6
+    style H fill:#ffe6b3
+    style I fill:#d4edff
+    style M fill:#e7f5e7
+```
+
+#### 13.2.4 Optimistic Update 흐름
+
+```mermaid
+graph TD
+    A[사용자: 답장 전송] --> B[sendReply 호출]
+    B --> C[임시 메시지 생성<br/>tempId 부여]
+
+    C --> D[dispatch<br/>SEND_REPLY_START]
+    D --> E[optimisticMessages에<br/>임시 메시지 추가]
+
+    E --> F[UI에 즉시 표시<br/>opacity: 0.6]
+
+    F --> G[WebSocket 전송<br/>REPLY_MESSAGE]
+
+    G --> H{서버 응답}
+    H -->|성공| I[NEW_REPLY_MESSAGE<br/>이벤트 수신]
+    H -->|실패| J[message_error<br/>이벤트 수신]
+
+    I --> K[dispatch<br/>SEND_REPLY_SUCCESS]
+    K --> L[임시 메시지 제거]
+    L --> M[실제 메시지로 교체<br/>opacity: 1.0]
+
+    J --> N[dispatch<br/>SEND_REPLY_FAILURE]
+    N --> O[임시 메시지 status=failed]
+    O --> P[재전송 버튼 표시]
+
+    style A fill:#e1f5ff
+    style D fill:#fff4e6
+    style F fill:#ffe6b3
+    style M fill:#e7f5e7
+    style P fill:#ffe6e6
+```
+
+---
+
+### 13.3 ReplyContext Interface 정의
+
+#### 13.3.1 Context Value 타입
+
+```typescript
+// src/features/messages/context/ReplyContext.types.ts
+
+import type { Message, ReplyTarget, ReplyError, ReplyState } from '../types';
+
+/**
+ * ReplyContext가 제공하는 전체 값의 타입
+ */
+export interface ReplyContextValue {
+  // ===== 상태 (State) =====
+  state: ReplyState;
+
+  // ===== 액션 (Actions) =====
+  actions: ReplyActions;
+
+  // ===== Refs =====
+  refs: ReplyRefs;
+
+  // ===== 파생 상태 (Derived State) =====
+  derived: ReplyDerivedState;
+}
+
+/**
+ * 액션 인터페이스
+ */
+export interface ReplyActions {
+  // 답장 대상 관리
+  setReplyTarget: (target: ReplyTarget) => void;
+  clearReplyTarget: () => void;
+
+  // 답장 전송
+  sendReply: (content: string) => Promise<void>;
+  retryReply: (failedMessage: Message) => Promise<void>;
+
+  // 스크롤 및 하이라이트
+  scrollToParentMessage: (messageId: number) => void;
+  clearHighlight: () => void;
+
+  // 에러 관리
+  clearError: () => void;
+}
+
+/**
+ * Refs 인터페이스
+ */
+export interface ReplyRefs {
+  messageInputRef: React.RefObject<HTMLTextAreaElement>;
+}
+
+/**
+ * 파생 상태 인터페이스 (계산된 값)
+ */
+export interface ReplyDerivedState {
+  // 답장 모드 활성화 여부
+  isReplyMode: boolean;
+
+  // 답장 전송 가능 여부
+  canSendReply: boolean;
+
+  // 미리보기 텍스트 (30자 제한)
+  replyPreviewText: string | null;
+
+  // 현재 표시할 메시지 목록 (실제 + Optimistic)
+  displayMessages: Message[];
+}
+```
+
+---
+
+### 13.4 Context Provider 구조 및 책임
+
+#### 13.4.1 Provider의 책임 범위
+
+| 책임 | 설명 | 구현 위치 |
+|------|------|-----------|
+| **상태 관리** | useReducer로 답장 상태 중앙 집중화 | Provider 내부 |
+| **액션 제공** | 하위 컴포넌트가 사용할 액션 함수 생성 및 메모이제이션 | Provider 내부 |
+| **WebSocket 통합** | 답장 관련 WebSocket 이벤트 구독 및 처리 | Provider useEffect |
+| **React Query 연동** | 서버 메시지 수신 시 캐시 업데이트 | Provider useEffect |
+| **Side Effect 관리** | 입력 필드 포커스, 스크롤 이동 등 | Provider useEffect |
+| **파생 상태 계산** | useMemo로 최적화된 계산 값 제공 | Provider 내부 |
+| **에러 처리** | 답장 관련 에러 상태 관리 및 전파 | Provider + Reducer |
+
+#### 13.4.2 Provider 초기화 프로세스
+
+```typescript
+// src/features/messages/context/ReplyProvider.interface.ts
+
+export interface ReplyProviderProps {
+  /**
+   * 현재 채팅방 ID
+   * WebSocket 연결 및 React Query 캐시 키에 사용
+   */
+  roomId: string;
+
+  /**
+   * React Query로 관리되는 전체 메시지 목록
+   * Optimistic 메시지와 병합하여 displayMessages 생성
+   */
+  messages: Message[];
+
+  /**
+   * 현재 로그인한 사용자 정보
+   * Optimistic 메시지 생성 시 필요
+   */
+  currentUser: CurrentUser | null;
+
+  /**
+   * 하위 컴포넌트
+   */
+  children: React.ReactNode;
+}
+```
+
+**초기화 단계**:
+1. **Props 검증**: roomId, currentUser 유효성 확인
+2. **Reducer 초기화**: useReducer(replyReducer, initialReplyState)
+3. **WebSocket 연결**: useWebSocket(roomId) 훅 호출
+4. **Refs 생성**: messageInputRef 생성
+5. **이벤트 리스너 등록**: WebSocket 이벤트 구독
+6. **파생 상태 계산**: useMemo로 displayMessages 등 계산
+7. **Context Value 생성**: 모든 값을 하나의 객체로 통합
+8. **Provider 렌더링**: Context.Provider에 value 전달
+
+---
+
+### 13.5 하위 컴포넌트에서 Context 소비 패턴
+
+#### 13.5.1 Hook 기반 소비 (권장)
+
+```typescript
+// src/features/messages/context/ReplyContext.hooks.ts
+
+/**
+ * 답장 Context를 소비하는 커스텀 훅
+ * Provider 외부에서 호출 시 명확한 에러 메시지 제공
+ */
+export const useReplyContext = (): ReplyContextValue => {
+  const context = useContext(ReplyContext);
+
+  if (!context) {
+    throw new Error(
+      'useReplyContext must be used within ReplyProvider. ' +
+      'Make sure <ReplyProvider> wraps your component tree.'
+    );
+  }
+
+  return context;
+};
+
+/**
+ * 선택적 구독을 위한 Selector Hook (성능 최적화)
+ */
+export const useReplySelector = <T,>(
+  selector: (value: ReplyContextValue) => T
+): T => {
+  const context = useReplyContext();
+  return selector(context);
+};
+```
+
+#### 13.5.2 컴포넌트별 소비 패턴
+
+**패턴 1: 전체 Context 사용 (작은 컴포넌트)**
+
+```typescript
+// MessageInputArea.tsx
+const MessageInputArea = () => {
+  const { state, actions, refs } = useReplyContext();
+
+  return (
+    <>
+      {state.replyTarget && (
+        <ReplyTargetPreview
+          replyTarget={state.replyTarget}
+          onCancel={actions.clearReplyTarget}
+        />
+      )}
+      <textarea ref={refs.messageInputRef} />
+    </>
+  );
+};
+```
+
+**패턴 2: 선택적 구독 (성능 최적화 필요 시)**
+
+```typescript
+// ReplyButton.tsx
+const ReplyButton = ({ message }: { message: Message }) => {
+  // 필요한 액션만 구독 (state 변경에 영향받지 않음)
+  const setReplyTarget = useReplySelector(
+    (ctx) => ctx.actions.setReplyTarget
+  );
+
+  const handleClick = () => {
+    setReplyTarget({
+      messageId: message.id,
+      content: message.content,
+      userNickname: message.user.nickname,
+      createdAt: message.created_at,
+    });
+  };
+
+  return <button onClick={handleClick}>답장</button>;
+};
+```
+
+**패턴 3: 파생 상태 사용**
+
+```typescript
+// MessageList.tsx
+const MessageList = () => {
+  // Optimistic 메시지가 포함된 전체 메시지 목록
+  const displayMessages = useReplySelector(
+    (ctx) => ctx.derived.displayMessages
+  );
+
+  const highlightMessageId = useReplySelector(
+    (ctx) => ctx.state.highlightMessage
+  );
+
+  return (
+    <div>
+      {displayMessages.map((msg) => (
+        <MessageItem
+          key={msg.id}
+          message={msg}
+          isHighlighted={msg.id === highlightMessageId}
+        />
+      ))}
+    </div>
+  );
+};
+```
+
+**패턴 4: 에러 표시**
+
+```typescript
+// ReplyErrorBanner.tsx
+const ReplyErrorBanner = () => {
+  const error = useReplySelector((ctx) => ctx.state.error);
+  const clearError = useReplySelector((ctx) => ctx.actions.clearError);
+
+  if (!error) return null;
+
+  return (
+    <div className="error-banner">
+      <p>{error.message}</p>
+      {error.retryable && <button>재시도</button>}
+      <button onClick={clearError}>닫기</button>
+    </div>
+  );
+};
+```
+
+---
+
+### 13.6 Context Value 메모이제이션 전략
+
+#### 13.6.1 메모이제이션 필요성
+
+Context value가 변경될 때마다 모든 소비자 컴포넌트가 리렌더링되므로, 불필요한 재생성을 방지해야 함.
+
+#### 13.6.2 메모이제이션 계층
+
+```typescript
+// Provider 내부 메모이제이션 구조
+
+// 1. 액션 함수 메모이제이션 (useCallback)
+const setReplyTarget = useCallback((target: ReplyTarget) => {
+  dispatch({ type: 'SET_REPLY_TARGET', payload: target });
+  // Side effect는 별도 useEffect에서 처리
+}, []);
+
+const sendReply = useCallback(async (content: string) => {
+  // ...구현
+}, [state.replyTarget, currentUser, ws, roomId]);
+
+// 2. Refs (항상 동일한 참조)
+const messageInputRef = useRef<HTMLTextAreaElement>(null);
+
+// 3. 파생 상태 메모이제이션 (useMemo)
+const displayMessages = useMemo(() => {
+  return [...messages, ...state.optimisticReplyMessages].sort(
+    (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+  );
+}, [messages, state.optimisticReplyMessages]);
+
+const isReplyMode = useMemo(() => state.replyTarget !== null, [state.replyTarget]);
+
+const canSendReply = useMemo(() => {
+  return (
+    state.replyTarget !== null &&
+    !state.isSendingReply &&
+    wsConnectionStatus === 'connected'
+  );
+}, [state.replyTarget, state.isSendingReply, wsConnectionStatus]);
+
+// 4. Context Value 메모이제이션 (useMemo)
+const contextValue = useMemo<ReplyContextValue>(
+  () => ({
+    state,
+    actions: {
+      setReplyTarget,
+      clearReplyTarget,
+      sendReply,
+      retryReply,
+      scrollToParentMessage,
+      clearHighlight,
+      clearError,
+    },
+    refs: {
+      messageInputRef,
+    },
+    derived: {
+      isReplyMode,
+      canSendReply,
+      replyPreviewText,
+      displayMessages,
+    },
+  }),
+  [
+    state, // Reducer state
+    // Actions (useCallback으로 안정된 참조)
+    setReplyTarget,
+    clearReplyTarget,
+    sendReply,
+    retryReply,
+    scrollToParentMessage,
+    clearHighlight,
+    clearError,
+    // Derived (useMemo로 안정된 참조)
+    isReplyMode,
+    canSendReply,
+    replyPreviewText,
+    displayMessages,
+  ]
+);
+```
+
+---
+
+### 13.7 Context와 다른 상태 관리의 통합
+
+#### 13.7.1 React Query 통합 흐름
+
+```mermaid
+graph TD
+    A[React Query<br/>messages 캐시] --> B[ReplyProvider Props]
+    B --> C[displayMessages 계산<br/>messages + optimisticMessages]
+
+    D[WebSocket Event<br/>NEW_REPLY_MESSAGE] --> E[Provider 이벤트 리스너]
+    E --> F[dispatch<br/>RECEIVE_REPLY_MESSAGE]
+    F --> G[Reducer<br/>optimisticMessages 업데이트]
+
+    E --> H[queryClient.setQueryData<br/>messages 캐시 업데이트]
+
+    G --> I[Context Value 변경]
+    H --> J[React Query 리렌더링]
+
+    I --> K[하위 컴포넌트 리렌더링]
+    J --> K
+
+    K --> L[최신 메시지 목록 표시]
+
+    style A fill:#d4edff
+    style D fill:#e1f5ff
+    style G fill:#fff4e6
+    style H fill:#d4edff
+    style L fill:#e7f5e7
+```
+
+#### 13.7.2 WebSocket 통합 흐름
+
+```mermaid
+graph TD
+    A[useWebSocket 훅] --> B[WebSocket 연결 인스턴스]
+    B --> C[ReplyProvider에서 사용]
+
+    C --> D[이벤트 리스너 등록<br/>useEffect]
+    D --> E1[NEW_REPLY_MESSAGE]
+    D --> E2[message_error]
+    D --> E3[connection_lost]
+
+    E1 --> F1[dispatch<br/>RECEIVE_REPLY_MESSAGE]
+    E2 --> F2[dispatch<br/>SEND_REPLY_FAILURE]
+    E3 --> F3[dispatch<br/>SET_ERROR]
+
+    F1 --> G[Reducer 상태 업데이트]
+    F2 --> G
+    F3 --> G
+
+    G --> H[Context Value 변경]
+    H --> I[UI 리렌더링]
+
+    style A fill:#e1f5ff
+    style D fill:#fff4e6
+    style G fill:#ffe6b3
+    style I fill:#e7f5e7
+```
+
+---
+
+### 13.8 컴포넌트 계층별 Context 사용
+
+| 컴포넌트 | 사용하는 Context 값 | 사용하는 액션 | 비고 |
+|---------|-------------------|-------------|------|
+| **ChatRoomPage** | - | - | Provider 제공 위치 |
+| **MessageList** | `derived.displayMessages`<br/>`state.highlightMessage` | `actions.scrollToParentMessage` | 메시지 목록 렌더링 |
+| **MessageItem** | `state.highlightMessage` | `actions.setReplyTarget`<br/>`actions.scrollToParentMessage` | 개별 메시지 UI |
+| **ReplyButton** | - | `actions.setReplyTarget` | 답장 시작 버튼 |
+| **ReplyIndicator** | - | `actions.scrollToParentMessage` | 원본 메시지 인용 |
+| **MessageInputArea** | `state.replyTarget`<br/>`state.isSendingReply`<br/>`derived.canSendReply` | `actions.sendReply`<br/>`actions.clearReplyTarget` | 메시지 입력 영역 |
+| **ReplyTargetPreview** | `state.replyTarget` | `actions.clearReplyTarget` | 답장 대상 미리보기 |
+| **SendButton** | `state.isSendingReply`<br/>`derived.canSendReply` | `actions.sendReply` | 전송 버튼 |
+| **ReplyErrorBanner** | `state.error` | `actions.clearError`<br/>`actions.retryReply` | 에러 표시 |
+
+---
+
+### 13.9 성능 최적화 체크리스트
+
+#### Context 최적화
+
+- [ ] Context Value를 useMemo로 메모이제이션
+- [ ] 액션 함수를 useCallback으로 메모이제이션
+- [ ] 파생 상태를 useMemo로 계산
+- [ ] 불필요한 리렌더링 방지를 위한 선택적 구독 (useReplySelector)
+- [ ] Context를 기능별로 분리 (필요 시 ReplyContext와 MessageContext 분리)
+
+#### 컴포넌트 최적화
+
+- [ ] React.memo로 순수 컴포넌트 최적화
+- [ ] useCallback으로 이벤트 핸들러 메모이제이션
+- [ ] 불필요한 Context 구독 최소화
+- [ ] 큰 리스트는 가상화 (react-window, react-virtualized)
+
+#### Reducer 최적화
+
+- [ ] Reducer 함수는 순수 함수로 유지
+- [ ] 불필요한 상태 복사 최소화 (Spread 연산자 최적화)
+- [ ] 상태 구조를 flat하게 유지 (nested 최소화)
+
+---
+
+## 14. 구현 우선순위
 
 ### Phase 1: 기본 답장 기능 (MVP)
 1. ✅ 답장 대상 선택 (`replyTarget` 상태 관리)
@@ -1461,11 +2057,12 @@ export const ReplyIndicator = ({
 
 ---
 
-## 12. 변경 이력
+## 15. 변경 이력
 
 | 버전 | 날짜 | 작성자 | 변경 내용 |
 |------|------|--------|-----------|
 | 1.0  | 2025-10-17 | Claude | 초기 작성 - 메시지 답장 기능 상태관리 설계 |
+| 1.1  | 2025-10-17 | Claude | Context + useReducer 아키텍처 설계 추가 (섹션 13) |
 
 ---
 
