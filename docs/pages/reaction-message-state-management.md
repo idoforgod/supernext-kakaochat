@@ -19,6 +19,8 @@
 7. [성능 최적화 전략](#7-성능-최적화-전략)
 8. [테스트 시나리오](#8-테스트-시나리오)
 9. [구현 우선순위](#9-구현-우선순위)
+10. [Flux 패턴 시각화](#10-flux-패턴-시각화-action--reducer--state--view)
+11. [useReducer 기반 상태 관리 구현](#11-usereducer-기반-상태-관리-구현)
 
 ---
 
@@ -482,10 +484,711 @@ useEffect(() => {
 
 ---
 
-## 10. 변경 이력
+## 10. Flux 패턴 시각화 (Action → Reducer → State → View)
+
+### 10.1 전체 Flux 아키텍처
+
+```mermaid
+graph LR
+    A[View<br/>ReactionButton] -->|사용자 클릭| B[Action<br/>TOGGLE_REACTION]
+    B -->|dispatch| C[Reducer<br/>reactionReducer]
+    C -->|새 상태 반환| D[State<br/>count, isActive]
+    D -->|리렌더링| A
+
+    E[API Response] -->|성공| F[Action<br/>SYNC_SERVER]
+    F -->|dispatch| C
+
+    E -->|실패| G[Action<br/>ROLLBACK]
+    G -->|dispatch| C
+
+    H[WebSocket] -->|REACTION_UPDATED| I[Action<br/>UPDATE_FROM_SERVER]
+    I -->|dispatch| C
+```
+
+### 10.2 반응 추가 플로우 (Optimistic Update)
+
+```mermaid
+sequenceDiagram
+    participant V as View (ReactionButton)
+    participant A as Action Creator
+    participant D as Dispatcher
+    participant R as Reducer
+    participant S as State
+    participant API as API Server
+
+    V->>A: 사용자 클릭 (비활성 → 활성)
+    A->>A: createAction('TOGGLE_REACTION')
+    A->>D: dispatch(TOGGLE_REACTION)
+    D->>R: reactionReducer(state, action)
+
+    R->>R: 검증: isActive 상태 확인
+    R->>R: 계산: count = count + 1
+    R->>R: 업데이트: isActive = true
+
+    R->>S: 새 상태 반환<br/>{count: 6, isActive: true}
+    S->>V: 리렌더링 트리거
+    V->>V: UI 업데이트 (하트 빨간색)
+
+    Note over V,API: 비동기 API 호출 (백그라운드)
+    V->>API: POST /api/messages/:id/reactions
+
+    alt API 성공
+        API->>A: 성공 응답 {totalCount: 6}
+        A->>D: dispatch(SYNC_SERVER)
+        D->>R: reactionReducer(state, action)
+        R->>S: 서버 데이터로 동기화
+        S->>V: 최종 상태 확인
+    else API 실패
+        API->>A: 에러 응답
+        A->>D: dispatch(ROLLBACK)
+        D->>R: reactionReducer(state, action)
+        R->>R: previousState로 복구
+        R->>S: 롤백된 상태 반환
+        S->>V: 이전 상태로 복구
+        V->>V: 에러 토스트 표시
+    end
+```
+
+### 10.3 반응 제거 플로우 (Optimistic Update)
+
+```mermaid
+sequenceDiagram
+    participant V as View
+    participant A as Action
+    participant R as Reducer
+    participant S as State
+
+    V->>A: 사용자 클릭 (활성 → 비활성)
+    A->>R: dispatch(TOGGLE_REACTION)
+
+    R->>R: 검증: isActive === true
+    R->>R: 계산: count = count - 1
+    R->>R: 업데이트: isActive = false
+
+    R->>S: {count: 5, isActive: false}
+    S->>V: 하트 회색으로 변경
+
+    Note over V,S: API 호출 및 동기화는<br/>반응 추가와 동일한 패턴
+```
+
+### 10.4 WebSocket 실시간 동기화 플로우
+
+```mermaid
+sequenceDiagram
+    participant WS as WebSocket Server
+    participant A as Action Creator
+    participant R as Reducer
+    participant S as State
+    participant V as View
+
+    WS->>WS: 다른 사용자가 반응 추가
+    WS->>A: REACTION_UPDATED 이벤트
+    A->>A: createAction('UPDATE_FROM_SERVER')
+    A->>R: dispatch(UPDATE_FROM_SERVER, payload)
+
+    R->>R: payload에서 messageId 확인
+    R->>R: 현재 메시지와 일치하는지 검증
+    R->>R: totalCount, isActive 업데이트
+
+    R->>S: 새 상태 반환
+    S->>V: 자동 리렌더링
+    V->>V: 반응 개수 증가 표시
+```
+
+### 10.5 에러 롤백 플로우
+
+```mermaid
+graph TD
+    A[Optimistic Update 실행] --> B{API 호출}
+    B -->|성공| C[SYNC_SERVER Action]
+    B -->|실패| D[ROLLBACK Action]
+
+    C --> E[Reducer: 서버 데이터 동기화]
+    D --> F[Reducer: previousState 복구]
+
+    E --> G[State 업데이트]
+    F --> G
+
+    G --> H[View 리렌더링]
+
+    D --> I[에러 토스트 표시]
+    I --> H
+```
+
+### 10.6 Action Types와 Payload 구조
+
+```mermaid
+classDiagram
+    class ReactionAction {
+        <<union>>
+    }
+
+    class ToggleReaction {
+        +type: 'TOGGLE_REACTION'
+        +payload: null
+    }
+
+    class SyncServer {
+        +type: 'SYNC_SERVER'
+        +payload: ServerData
+    }
+
+    class Rollback {
+        +type: 'ROLLBACK'
+        +payload: null
+    }
+
+    class UpdateFromServer {
+        +type: 'UPDATE_FROM_SERVER'
+        +payload: WebSocketData
+    }
+
+    class ServerData {
+        +totalCount: number
+        +isActive: boolean
+    }
+
+    class WebSocketData {
+        +messageId: number
+        +totalCount: number
+        +isActive: boolean
+        +userId: number
+    }
+
+    ReactionAction <|-- ToggleReaction
+    ReactionAction <|-- SyncServer
+    ReactionAction <|-- Rollback
+    ReactionAction <|-- UpdateFromServer
+
+    SyncServer --> ServerData
+    UpdateFromServer --> WebSocketData
+```
+
+### 10.7 State 변화 추적
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle: 초기 상태
+
+    Idle --> Optimistic: TOGGLE_REACTION
+    Optimistic --> Synced: SYNC_SERVER (성공)
+    Optimistic --> Idle: ROLLBACK (실패)
+
+    Synced --> Optimistic: TOGGLE_REACTION (재클릭)
+
+    Idle --> Updated: UPDATE_FROM_SERVER
+    Synced --> Updated: UPDATE_FROM_SERVER
+    Updated --> Updated: UPDATE_FROM_SERVER (계속 수신)
+
+    note right of Idle
+        count: initialCount
+        isActive: initialIsActive
+        isPending: false
+    end note
+
+    note right of Optimistic
+        count: count ± 1
+        isActive: !isActive
+        isPending: true
+    end note
+
+    note right of Synced
+        count: serverCount
+        isActive: serverIsActive
+        isPending: false
+    end note
+
+    note right of Updated
+        count: wsCount
+        isActive: wsIsActive
+        isPending: false
+    end note
+```
+
+---
+
+## 11. useReducer 기반 상태 관리 구현
+
+### 11.1 Action Types 정의
+
+```typescript
+// src/features/messages/types/reactionActions.ts
+
+export type ReactionAction =
+  | { type: 'TOGGLE_REACTION' }
+  | { type: 'SYNC_SERVER'; payload: { totalCount: number; isActive: boolean } }
+  | { type: 'ROLLBACK' }
+  | { type: 'UPDATE_FROM_SERVER'; payload: { messageId: number; totalCount: number; isActive: boolean; userId: number } }
+  | { type: 'RESET'; payload: { count: number; isActive: boolean } };
+
+export const ReactionActionType = {
+  TOGGLE_REACTION: 'TOGGLE_REACTION',
+  SYNC_SERVER: 'SYNC_SERVER',
+  ROLLBACK: 'ROLLBACK',
+  UPDATE_FROM_SERVER: 'UPDATE_FROM_SERVER',
+  RESET: 'RESET',
+} as const;
+```
+
+### 11.2 State 타입 정의
+
+```typescript
+// src/features/messages/types/reactionState.ts
+
+export interface ReactionState {
+  // 현재 상태
+  count: number;
+  isActive: boolean;
+  isPending: boolean;
+
+  // 롤백을 위한 이전 상태
+  previousCount: number;
+  previousIsActive: boolean;
+
+  // 에러 상태
+  error: string | null;
+}
+
+export const initialReactionState: ReactionState = {
+  count: 0,
+  isActive: false,
+  isPending: false,
+  previousCount: 0,
+  previousIsActive: false,
+  error: null,
+};
+```
+
+### 11.3 Reducer 함수 구현
+
+```typescript
+// src/features/messages/reducers/reactionReducer.ts
+
+import type { ReactionState } from '../types/reactionState';
+import type { ReactionAction } from '../types/reactionActions';
+
+export function reactionReducer(
+  state: ReactionState,
+  action: ReactionAction
+): ReactionState {
+  switch (action.type) {
+    case 'TOGGLE_REACTION': {
+      // Optimistic Update: 즉시 상태 변경
+      return {
+        ...state,
+        // 이전 상태 백업 (롤백용)
+        previousCount: state.count,
+        previousIsActive: state.isActive,
+        // 새 상태 계산
+        count: state.isActive ? state.count - 1 : state.count + 1,
+        isActive: !state.isActive,
+        isPending: true,
+        error: null,
+      };
+    }
+
+    case 'SYNC_SERVER': {
+      // 서버 응답으로 상태 동기화 (성공)
+      const { totalCount, isActive } = action.payload;
+      return {
+        ...state,
+        count: totalCount,
+        isActive,
+        isPending: false,
+        error: null,
+      };
+    }
+
+    case 'ROLLBACK': {
+      // 에러 발생 시 이전 상태로 롤백
+      return {
+        ...state,
+        count: state.previousCount,
+        isActive: state.previousIsActive,
+        isPending: false,
+        error: 'Failed to update reaction',
+      };
+    }
+
+    case 'UPDATE_FROM_SERVER': {
+      // WebSocket 실시간 업데이트
+      const { totalCount, isActive } = action.payload;
+      return {
+        ...state,
+        count: totalCount,
+        isActive,
+        isPending: false,
+        error: null,
+      };
+    }
+
+    case 'RESET': {
+      // Props 변경 시 초기화
+      const { count, isActive } = action.payload;
+      return {
+        ...state,
+        count,
+        isActive,
+        previousCount: count,
+        previousIsActive: isActive,
+        isPending: false,
+        error: null,
+      };
+    }
+
+    default:
+      return state;
+  }
+}
+```
+
+### 11.4 Action Creator 함수
+
+```typescript
+// src/features/messages/actions/reactionActions.ts
+
+import type { ReactionAction } from '../types/reactionActions';
+
+export const reactionActions = {
+  toggleReaction: (): ReactionAction => ({
+    type: 'TOGGLE_REACTION',
+  }),
+
+  syncServer: (totalCount: number, isActive: boolean): ReactionAction => ({
+    type: 'SYNC_SERVER',
+    payload: { totalCount, isActive },
+  }),
+
+  rollback: (): ReactionAction => ({
+    type: 'ROLLBACK',
+  }),
+
+  updateFromServer: (
+    messageId: number,
+    totalCount: number,
+    isActive: boolean,
+    userId: number
+  ): ReactionAction => ({
+    type: 'UPDATE_FROM_SERVER',
+    payload: { messageId, totalCount, isActive, userId },
+  }),
+
+  reset: (count: number, isActive: boolean): ReactionAction => ({
+    type: 'RESET',
+    payload: { count, isActive },
+  }),
+};
+```
+
+### 11.5 Custom Hook 구현
+
+```typescript
+// src/features/messages/hooks/useReactionState.ts
+
+import { useReducer, useEffect } from 'react';
+import { reactionReducer } from '../reducers/reactionReducer';
+import { reactionActions } from '../actions/reactionActions';
+import type { ReactionState } from '../types/reactionState';
+
+interface UseReactionStateProps {
+  initialCount: number;
+  initialIsActive: boolean;
+}
+
+export function useReactionState({
+  initialCount,
+  initialIsActive,
+}: UseReactionStateProps) {
+  const initialState: ReactionState = {
+    count: initialCount,
+    isActive: initialIsActive,
+    isPending: false,
+    previousCount: initialCount,
+    previousIsActive: initialIsActive,
+    error: null,
+  };
+
+  const [state, dispatch] = useReducer(reactionReducer, initialState);
+
+  // Props 변경 시 상태 동기화
+  useEffect(() => {
+    dispatch(reactionActions.reset(initialCount, initialIsActive));
+  }, [initialCount, initialIsActive]);
+
+  // Action Creator 함수들을 반환
+  const actions = {
+    toggleReaction: () => dispatch(reactionActions.toggleReaction()),
+    syncServer: (totalCount: number, isActive: boolean) =>
+      dispatch(reactionActions.syncServer(totalCount, isActive)),
+    rollback: () => dispatch(reactionActions.rollback()),
+    updateFromServer: (
+      messageId: number,
+      totalCount: number,
+      isActive: boolean,
+      userId: number
+    ) =>
+      dispatch(
+        reactionActions.updateFromServer(messageId, totalCount, isActive, userId)
+      ),
+  };
+
+  return { state, actions };
+}
+```
+
+### 11.6 컴포넌트 사용 예시
+
+```typescript
+// src/features/messages/components/ReactionButton.tsx (useReducer 버전)
+
+'use client';
+
+import { Heart } from 'lucide-react';
+import { useReactionState } from '../hooks/useReactionState';
+import { useToggleReaction } from '../hooks/useToggleReaction';
+import { useToast } from '@/hooks/use-toast';
+import { MESSAGE_UI_TEXT } from '../constants/text';
+
+interface ReactionButtonProps {
+  messageId: number;
+  initialCount: number;
+  initialIsActive: boolean;
+  isOwnMessage?: boolean;
+}
+
+export function ReactionButton({
+  messageId,
+  initialCount,
+  initialIsActive,
+  isOwnMessage = false,
+}: ReactionButtonProps) {
+  const { state, actions } = useReactionState({ initialCount, initialIsActive });
+  const { toast } = useToast();
+  const toggleReactionMutation = useToggleReaction();
+
+  const handleClick = async () => {
+    // 1. Optimistic Update (Flux Action: TOGGLE_REACTION)
+    actions.toggleReaction();
+
+    try {
+      // 2. API 호출
+      const response = await toggleReactionMutation.mutateAsync({ messageId });
+
+      // 3. 성공 시 서버 데이터로 동기화 (Flux Action: SYNC_SERVER)
+      actions.syncServer(response.totalCount, response.isActive);
+    } catch (error: any) {
+      // 4. 실패 시 롤백 (Flux Action: ROLLBACK)
+      actions.rollback();
+
+      const errorCode = error?.response?.data?.error?.code;
+      let errorMessage: string = MESSAGE_UI_TEXT.ERROR_REACTION_FAILED;
+
+      if (errorCode === 'MESSAGE_NOT_FOUND') {
+        errorMessage = MESSAGE_UI_TEXT.ERROR_MESSAGE_NOT_FOUND;
+      } else if (errorCode === 'UNAUTHORIZED') {
+        errorMessage = MESSAGE_UI_TEXT.ERROR_UNAUTHORIZED;
+      }
+
+      toast({
+        variant: 'destructive',
+        title: errorMessage,
+      });
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={state.isPending}
+      className={`flex items-center gap-1 rounded px-2 py-1 transition-all duration-300 ${
+        isOwnMessage
+          ? state.isActive
+            ? 'bg-white/20 text-white'
+            : 'text-white/70 hover:bg-white/10 hover:text-white'
+          : state.isActive
+          ? 'bg-red-50 text-red-500'
+          : 'text-gray-400 hover:bg-gray-100 hover:text-red-500'
+      } ${state.isPending ? 'opacity-50 cursor-wait' : 'hover:scale-110'}`}
+      aria-label={state.isActive ? `${MESSAGE_UI_TEXT.REACTION_LIKE} 취소` : MESSAGE_UI_TEXT.REACTION_LIKE}
+    >
+      <Heart
+        className={`h-4 w-4 transition-all duration-300 ${
+          state.isActive ? 'fill-current scale-125' : 'scale-100'
+        }`}
+      />
+      {state.count > 0 && <span className="text-xs font-medium">{state.count}</span>}
+    </button>
+  );
+}
+```
+
+### 11.7 WebSocket 통합 예시
+
+```typescript
+// src/features/messages/hooks/useReactionWebSocket.ts
+
+import { useEffect } from 'react';
+import type { ReactionState } from '../types/reactionState';
+
+interface UseReactionWebSocketProps {
+  messageId: number;
+  currentUserId: number;
+  actions: {
+    updateFromServer: (messageId: number, totalCount: number, isActive: boolean, userId: number) => void;
+  };
+}
+
+export function useReactionWebSocket({
+  messageId,
+  currentUserId,
+  actions,
+}: UseReactionWebSocketProps) {
+  useEffect(() => {
+    // WebSocket 연결은 상위 컴포넌트에서 관리
+    const handleReactionUpdate = (event: {
+      type: 'REACTION_UPDATED';
+      payload: {
+        messageId: number;
+        totalCount: number;
+        isActive: boolean;
+        userId: number;
+      };
+    }) => {
+      // 현재 메시지에 대한 업데이트만 처리
+      if (event.payload.messageId === messageId) {
+        // Flux Action: UPDATE_FROM_SERVER
+        actions.updateFromServer(
+          event.payload.messageId,
+          event.payload.totalCount,
+          event.payload.isActive && event.payload.userId === currentUserId,
+          event.payload.userId
+        );
+      }
+    };
+
+    // WebSocket 이벤트 리스너 등록
+    window.addEventListener('reaction-updated', handleReactionUpdate as any);
+
+    return () => {
+      window.removeEventListener('reaction-updated', handleReactionUpdate as any);
+    };
+  }, [messageId, currentUserId, actions]);
+}
+```
+
+### 11.8 테스트 예시
+
+```typescript
+// src/features/messages/reducers/reactionReducer.test.ts
+
+import { describe, it, expect } from 'vitest';
+import { reactionReducer } from './reactionReducer';
+import { reactionActions } from '../actions/reactionActions';
+import type { ReactionState } from '../types/reactionState';
+
+describe('reactionReducer', () => {
+  const initialState: ReactionState = {
+    count: 5,
+    isActive: false,
+    isPending: false,
+    previousCount: 5,
+    previousIsActive: false,
+    error: null,
+  };
+
+  it('TOGGLE_REACTION: 반응 추가 시 count 증가 및 isActive true', () => {
+    const action = reactionActions.toggleReaction();
+    const newState = reactionReducer(initialState, action);
+
+    expect(newState.count).toBe(6);
+    expect(newState.isActive).toBe(true);
+    expect(newState.isPending).toBe(true);
+    expect(newState.previousCount).toBe(5);
+    expect(newState.previousIsActive).toBe(false);
+  });
+
+  it('TOGGLE_REACTION: 반응 제거 시 count 감소 및 isActive false', () => {
+    const activeState: ReactionState = {
+      ...initialState,
+      count: 6,
+      isActive: true,
+    };
+    const action = reactionActions.toggleReaction();
+    const newState = reactionReducer(activeState, action);
+
+    expect(newState.count).toBe(5);
+    expect(newState.isActive).toBe(false);
+    expect(newState.isPending).toBe(true);
+  });
+
+  it('SYNC_SERVER: 서버 응답으로 상태 동기화', () => {
+    const optimisticState: ReactionState = {
+      ...initialState,
+      count: 6,
+      isActive: true,
+      isPending: true,
+    };
+    const action = reactionActions.syncServer(6, true);
+    const newState = reactionReducer(optimisticState, action);
+
+    expect(newState.count).toBe(6);
+    expect(newState.isActive).toBe(true);
+    expect(newState.isPending).toBe(false);
+    expect(newState.error).toBe(null);
+  });
+
+  it('ROLLBACK: 이전 상태로 롤백', () => {
+    const optimisticState: ReactionState = {
+      count: 6,
+      isActive: true,
+      isPending: true,
+      previousCount: 5,
+      previousIsActive: false,
+      error: null,
+    };
+    const action = reactionActions.rollback();
+    const newState = reactionReducer(optimisticState, action);
+
+    expect(newState.count).toBe(5);
+    expect(newState.isActive).toBe(false);
+    expect(newState.isPending).toBe(false);
+    expect(newState.error).toBe('Failed to update reaction');
+  });
+
+  it('UPDATE_FROM_SERVER: WebSocket 이벤트로 상태 업데이트', () => {
+    const action = reactionActions.updateFromServer(123, 7, false, 456);
+    const newState = reactionReducer(initialState, action);
+
+    expect(newState.count).toBe(7);
+    expect(newState.isActive).toBe(false);
+    expect(newState.isPending).toBe(false);
+  });
+
+  it('RESET: Props 변경 시 상태 초기화', () => {
+    const modifiedState: ReactionState = {
+      ...initialState,
+      count: 10,
+      isActive: true,
+    };
+    const action = reactionActions.reset(8, true);
+    const newState = reactionReducer(modifiedState, action);
+
+    expect(newState.count).toBe(8);
+    expect(newState.isActive).toBe(true);
+    expect(newState.previousCount).toBe(8);
+    expect(newState.previousIsActive).toBe(true);
+  });
+});
+```
+
+---
+
+## 12. 변경 이력
 
 | 버전 | 날짜 | 작성자 | 변경 내용 |
 |------|------|--------|-----------|
+| 1.1  | 2025-10-17 | Claude | Flux 패턴 시각화 및 useReducer 구현 추가 |
 | 1.0  | 2025-10-17 | Claude | 초기 작성 - 메시지 반응하기 상태관리 설계 |
 
 ---
