@@ -4,7 +4,7 @@
 - **기능**: 메시지에 반응하기 (좋아요 ❤️)
 - **작성일**: 2025-10-17
 - **관련 UC**: UC-007
-- **버전**: 1.0
+- **버전**: 1.2
 
 ---
 
@@ -21,6 +21,7 @@
 9. [구현 우선순위](#9-구현-우선순위)
 10. [Flux 패턴 시각화](#10-flux-패턴-시각화-action--reducer--state--view)
 11. [useReducer 기반 상태 관리 구현](#11-usereducer-기반-상태-관리-구현)
+12. [Context + useReducer 아키텍처 설계](#13-context--usereducer-아키텍처-설계)
 
 ---
 
@@ -1184,10 +1185,571 @@ describe('reactionReducer', () => {
 
 ---
 
-## 12. 변경 이력
+## 13. Context + useReducer 아키텍처 설계
+
+### 13.1 Context 아키텍처 개요
+
+Context API를 사용하여 메시지 반응 상태를 전역으로 관리하고, 여러 컴포넌트에서 Props Drilling 없이 접근 가능하도록 설계합니다.
+
+**설계 목표**:
+- 채팅방 내 모든 메시지의 반응 상태를 중앙에서 관리
+- WebSocket 이벤트를 Context에서 수신하여 모든 컴포넌트에 자동 전파
+- Props Drilling 제거 및 컴포넌트 간 결합도 감소
+- useReducer로 복잡한 상태 업데이트 로직을 순수 함수로 분리
+
+### 13.2 Context Provider 데이터 흐름
+
+#### 13.2.1 전체 아키텍처
+
+```mermaid
+graph TD
+    A[ChatRoomPage] --> B[ReactionProvider]
+    B --> C[MessageList]
+    C --> D[MessageItem 1]
+    C --> E[MessageItem 2]
+    C --> F[MessageItem N]
+
+    D --> G[ReactionButton 1]
+    E --> H[ReactionButton 2]
+    F --> I[ReactionButton N]
+
+    B -.제공.-> J[ReactionContext]
+    J -.구독.-> G
+    J -.구독.-> H
+    J -.구독.-> I
+
+    K[WebSocket] -->|REACTION_UPDATED| B
+    L[React Query] -->|messages 초기화| B
+
+    style B fill:#e1f5ff
+    style J fill:#ffe1e1
+```
+
+#### 13.2.2 Provider 초기화 및 라이프사이클
+
+```mermaid
+sequenceDiagram
+    participant App as ChatRoomPage
+    participant Provider as ReactionProvider
+    participant Reducer as useReducer
+    participant WS as WebSocket
+    participant RQ as React Query
+
+    App->>Provider: 마운트
+    Provider->>RQ: messages 구독
+    RQ-->>Provider: 초기 메시지 목록
+
+    Provider->>Reducer: INITIALIZE_REACTIONS
+    Reducer-->>Provider: 초기 상태 반환
+
+    Provider->>WS: 이벤트 리스너 등록
+    Provider->>Provider: Context Value 생성
+
+    Note over Provider: 하위 컴포넌트에<br/>Context 제공
+
+    loop WebSocket 이벤트 수신
+        WS->>Provider: REACTION_UPDATED
+        Provider->>Reducer: dispatch(UPDATE_REACTION)
+        Reducer-->>Provider: 새 상태
+        Provider->>Provider: Context Value 업데이트
+        Provider-->>App: 리렌더링 트리거
+    end
+
+    App->>Provider: 언마운트
+    Provider->>WS: 이벤트 리스너 해제
+```
+
+#### 13.2.3 사용자 액션 처리 흐름
+
+```mermaid
+sequenceDiagram
+    participant User as 사용자
+    participant Button as ReactionButton
+    participant Ctx as useReactionContext
+    participant Reducer as Reducer
+    participant API as API Server
+
+    User->>Button: 하트 클릭
+    Button->>Ctx: actions.toggleReaction(messageId)
+    Ctx->>Reducer: dispatch(TOGGLE_REACTION)
+
+    Reducer->>Reducer: Optimistic Update
+    Reducer-->>Ctx: 새 상태 반환
+    Ctx-->>Button: 리렌더링 (하트 빨간색)
+
+    Ctx->>API: POST /api/messages/:id/reactions
+
+    alt API 성공
+        API-->>Ctx: { totalCount, isActive }
+        Ctx->>Reducer: dispatch(SYNC_SERVER)
+        Reducer-->>Ctx: 서버 데이터로 동기화
+        Ctx-->>Button: 최종 상태 확인
+    else API 실패
+        API-->>Ctx: 에러 응답
+        Ctx->>Reducer: dispatch(ROLLBACK)
+        Reducer-->>Ctx: 이전 상태 복구
+        Ctx-->>Button: 롤백된 상태 표시
+        Ctx->>Button: 에러 토스트
+    end
+```
+
+#### 13.2.4 WebSocket 실시간 동기화
+
+```mermaid
+sequenceDiagram
+    participant WS as WebSocket Server
+    participant Provider as ReactionProvider
+    participant Reducer as Reducer
+    participant Context as ReactionContext
+    participant Buttons as 모든 ReactionButton
+
+    WS->>Provider: REACTION_UPDATED 이벤트
+    Provider->>Provider: 이벤트 파싱
+
+    Provider->>Reducer: dispatch(UPDATE_FROM_SERVER)
+    Reducer->>Reducer: 해당 messageId 찾기
+    Reducer->>Reducer: totalCount, isActive 업데이트
+    Reducer-->>Provider: 새 상태 반환
+
+    Provider->>Context: Context Value 업데이트
+    Context-->>Buttons: 자동 리렌더링
+
+    Note over Buttons: 변경된 메시지만<br/>React.memo로 최적화
+```
+
+### 13.3 ReactionContext 인터페이스 정의
+
+#### 13.3.1 Context Value 구조
+
+```typescript
+// src/features/messages/contexts/ReactionContext.ts
+
+export interface ReactionContextValue {
+  // ===== 상태 (State) =====
+  state: ReactionGlobalState;
+
+  // ===== 액션 (Actions) =====
+  actions: ReactionActions;
+
+  // ===== 셀렉터 (Selectors) =====
+  selectors: ReactionSelectors;
+}
+
+export interface ReactionGlobalState {
+  // 메시지별 반응 상태 맵 (messageId → ReactionState)
+  reactions: Map<number, MessageReaction>;
+
+  // 전역 로딩 상태
+  isInitialized: boolean;
+
+  // 전역 에러 상태
+  globalError: string | null;
+}
+
+export interface MessageReaction {
+  messageId: number;
+  count: number;
+  isActive: boolean;
+  isPending: boolean;
+  previousCount: number;
+  previousIsActive: boolean;
+  error: string | null;
+}
+```
+
+#### 13.3.2 Actions 인터페이스
+
+```typescript
+export interface ReactionActions {
+  // 메시지 반응 초기화 (React Query에서 가져온 데이터)
+  initializeReactions: (messages: Message[]) => void;
+
+  // 특정 메시지 반응 토글
+  toggleReaction: (messageId: number) => Promise<void>;
+
+  // 서버 응답으로 동기화
+  syncReaction: (messageId: number, totalCount: number, isActive: boolean) => void;
+
+  // 에러 발생 시 롤백
+  rollbackReaction: (messageId: number) => void;
+
+  // WebSocket 업데이트 처리
+  updateReactionFromServer: (
+    messageId: number,
+    totalCount: number,
+    isActive: boolean,
+    userId: number
+  ) => void;
+
+  // 전역 에러 클리어
+  clearGlobalError: () => void;
+}
+```
+
+#### 13.3.3 Selectors 인터페이스
+
+```typescript
+export interface ReactionSelectors {
+  // 특정 메시지의 반응 상태 조회
+  getReaction: (messageId: number) => MessageReaction | undefined;
+
+  // 특정 메시지의 반응 개수
+  getReactionCount: (messageId: number) => number;
+
+  // 특정 메시지에 현재 사용자가 반응했는지
+  hasUserReacted: (messageId: number) => boolean;
+
+  // 특정 메시지가 로딩 중인지
+  isPending: (messageId: number) => boolean;
+
+  // 모든 반응 상태 조회 (디버깅용)
+  getAllReactions: () => Map<number, MessageReaction>;
+}
+```
+
+### 13.4 ReactionProvider 구조
+
+```mermaid
+classDiagram
+    class ReactionProvider {
+        +children: ReactNode
+        -state: ReactionGlobalState
+        -dispatch: Dispatch
+        -currentUserId: number
+        -roomId: number
+        -useEffect() 초기화
+        -useEffect() WebSocket 구독
+        -useMemo() Context Value
+        +render() Context.Provider
+    }
+
+    class ReactionContext {
+        +value: ReactionContextValue
+        +Provider: Component
+        +Consumer: Component
+    }
+
+    class useReactionContext {
+        +state: ReactionGlobalState
+        +actions: ReactionActions
+        +selectors: ReactionSelectors
+        +throws Error if no Provider
+    }
+
+    ReactionProvider --> ReactionContext : provides
+    useReactionContext --> ReactionContext : consumes
+```
+
+**Provider 책임**:
+1. **초기화**: React Query에서 가져온 메시지 목록으로 초기 상태 생성
+2. **WebSocket 관리**: 실시간 이벤트 수신 및 상태 업데이트
+3. **Action 구현**: API 호출, 에러 처리, Optimistic Update
+4. **메모이제이션**: 불필요한 리렌더링 방지
+5. **에러 경계**: 전역 에러 상태 관리
+
+### 13.5 컴포넌트별 Context 사용 패턴
+
+#### 13.5.1 ChatRoomPage (Provider 설정)
+
+```typescript
+// Context Provider를 최상위에 배치
+<ReactionProvider roomId={roomId} currentUserId={currentUser.id}>
+  <MessageList messages={messages} />
+</ReactionProvider>
+```
+
+**노출 데이터**: 없음 (Provider 역할만)
+
+#### 13.5.2 MessageList (Pass-through)
+
+```typescript
+// Context를 직접 사용하지 않고 children에게 전달
+{messages.map(message => (
+  <MessageItem key={message.id} message={message} />
+))}
+```
+
+**노출 데이터**: 없음 (Context 투명하게 전달)
+
+#### 13.5.3 MessageItem (선택적 사용)
+
+```typescript
+// 필요 시 Context에서 특정 메시지 상태 조회
+const { selectors } = useReactionContext();
+const reactionCount = selectors.getReactionCount(message.id);
+```
+
+**노출 데이터**:
+- `selectors.getReactionCount(messageId)`
+- `selectors.hasUserReacted(messageId)`
+
+#### 13.5.4 ReactionButton (주요 소비자)
+
+```typescript
+// Context에서 필요한 모든 데이터와 액션 사용
+const { selectors, actions } = useReactionContext();
+
+const count = selectors.getReactionCount(messageId);
+const isActive = selectors.hasUserReacted(messageId);
+const isPending = selectors.isPending(messageId);
+
+const handleClick = () => {
+  actions.toggleReaction(messageId);
+};
+```
+
+**노출 데이터**:
+- **Selectors**: `getReactionCount`, `hasUserReacted`, `isPending`
+- **Actions**: `toggleReaction`
+
+### 13.6 노출 변수 및 함수 전체 목록
+
+#### 13.6.1 State (읽기 전용)
+
+| 변수명 | 타입 | 설명 | 접근 방법 |
+|--------|------|------|-----------|
+| `reactions` | `Map<number, MessageReaction>` | 모든 메시지 반응 상태 | `state.reactions` |
+| `isInitialized` | `boolean` | Provider 초기화 완료 여부 | `state.isInitialized` |
+| `globalError` | `string \| null` | 전역 에러 메시지 | `state.globalError` |
+
+#### 13.6.2 Actions (쓰기)
+
+| 함수명 | 파라미터 | 반환값 | 설명 |
+|--------|----------|--------|------|
+| `initializeReactions` | `messages: Message[]` | `void` | 초기 반응 상태 설정 |
+| `toggleReaction` | `messageId: number` | `Promise<void>` | 반응 토글 (Optimistic Update + API 호출) |
+| `syncReaction` | `messageId, totalCount, isActive` | `void` | 서버 응답으로 동기화 |
+| `rollbackReaction` | `messageId: number` | `void` | 에러 시 이전 상태 복구 |
+| `updateReactionFromServer` | `messageId, totalCount, isActive, userId` | `void` | WebSocket 이벤트 처리 |
+| `clearGlobalError` | - | `void` | 전역 에러 상태 클리어 |
+
+#### 13.6.3 Selectors (읽기 헬퍼)
+
+| 함수명 | 파라미터 | 반환값 | 설명 |
+|--------|----------|--------|------|
+| `getReaction` | `messageId: number` | `MessageReaction \| undefined` | 특정 메시지 반응 상태 전체 |
+| `getReactionCount` | `messageId: number` | `number` | 반응 개수 (default: 0) |
+| `hasUserReacted` | `messageId: number` | `boolean` | 현재 사용자 반응 여부 |
+| `isPending` | `messageId: number` | `boolean` | 로딩 중 여부 |
+| `getAllReactions` | - | `Map<number, MessageReaction>` | 모든 반응 상태 (디버깅) |
+
+### 13.7 Context Value 메모이제이션 전략
+
+```mermaid
+graph TD
+    A[ReactionProvider 렌더링] --> B{state 변경?}
+    B -->|Yes| C[새 Context Value 생성]
+    B -->|No| D[기존 Context Value 재사용]
+
+    C --> E[useMemo로 actions 메모이제이션]
+    E --> F[useMemo로 selectors 메모이제이션]
+    F --> G[useMemo로 전체 value 메모이제이션]
+
+    G --> H[Context.Provider 업데이트]
+    D --> H
+
+    H --> I{변경된 messageId만 리렌더링}
+    I --> J[React.memo로 최적화]
+
+    style C fill:#ffcccc
+    style D fill:#ccffcc
+    style J fill:#cce5ff
+```
+
+**메모이제이션 규칙**:
+1. `actions` 객체: `useCallback`으로 각 함수 메모이제이션
+2. `selectors` 객체: `useMemo`로 전체 객체 메모이제이션
+3. `contextValue`: `useMemo`로 최종 값 메모이제이션
+4. 의존성 배열: `[state, currentUserId]` 만 포함
+
+### 13.8 React Query와의 통합
+
+```mermaid
+sequenceDiagram
+    participant RQ as React Query
+    participant Page as ChatRoomPage
+    participant Provider as ReactionProvider
+    participant Reducer as Reducer
+    participant Context as ReactionContext
+
+    RQ->>Page: messages 쿼리 완료
+    Page->>Provider: messages props 전달
+
+    Provider->>Provider: useEffect 감지
+    Provider->>Reducer: dispatch(INITIALIZE_REACTIONS)
+
+    loop 각 메시지
+        Reducer->>Reducer: Map.set(messageId, { count, isActive, ... })
+    end
+
+    Reducer-->>Provider: 초기화된 상태
+    Provider->>Context: Context Value 업데이트
+    Context-->>Page: 하위 컴포넌트 렌더링
+
+    Note over RQ,Context: 이후 WebSocket 이벤트로만 업데이트<br/>React Query는 초기화만 담당
+```
+
+**통합 원칙**:
+- React Query: 초기 데이터 로딩 및 캐싱
+- Context: 실시간 반응 상태 관리
+- WebSocket: 실시간 업데이트
+- 역할 분리로 책임 명확화
+
+### 13.9 컴포넌트 계층별 Context 사용
+
+```mermaid
+graph TD
+    A[ChatRoomPage] -->|provide| B[ReactionProvider]
+
+    B --> C[MessageList]
+    C --> D[MessageItem 1]
+    C --> E[MessageItem 2]
+
+    D --> F[ReactionButton 1]
+    E --> G[ReactionButton 2]
+
+    F -.useReactionContext.-> H[Context]
+    G -.useReactionContext.-> H
+
+    B -.provides.-> H
+
+    I[WebSocket Handler] -.actions.-> H
+    J[API Client] -.actions.-> H
+
+    style B fill:#e1f5ff,stroke:#0066cc,stroke-width:3px
+    style H fill:#ffe1e1,stroke:#cc0000,stroke-width:3px
+    style F fill:#ccffcc
+    style G fill:#ccffcc
+```
+
+| 컴포넌트 | Context 사용 여부 | 사용하는 API | 목적 |
+|---------|-----------------|-------------|------|
+| **ChatRoomPage** | ❌ | - | Provider만 배치 |
+| **ReactionProvider** | ✅ (제공) | state, dispatch | Context 제공 |
+| **MessageList** | ❌ | - | Pass-through |
+| **MessageItem** | ⚠️ (선택) | selectors | 최적화 시 사용 |
+| **ReactionButton** | ✅ | selectors, actions | 메인 소비자 |
+
+### 13.10 에러 처리 및 폴백 전략
+
+```mermaid
+stateDiagram-v2
+    [*] --> Initializing: Provider 마운트
+
+    Initializing --> Ready: INITIALIZE_REACTIONS 성공
+    Initializing --> Error: 초기화 실패
+
+    Ready --> Optimistic: toggleReaction 호출
+    Optimistic --> Ready: API 성공
+    Optimistic --> Error: API 실패
+
+    Error --> Ready: clearGlobalError 호출
+    Error --> [*]: Provider 언마운트
+
+    Ready --> [*]: Provider 언마운트
+
+    note right of Error
+        globalError 상태 설정
+        사용자에게 토스트 표시
+        자동 재시도 또는 수동 복구
+    end note
+
+    note right of Optimistic
+        isPending = true
+        Optimistic Update 적용
+        API 호출 진행 중
+    end note
+```
+
+**에러 복구 전략**:
+1. **Network Error**: 자동 재시도 (최대 3회, Exponential Backoff)
+2. **Validation Error**: 사용자 입력 확인 요청
+3. **Authorization Error**: 로그인 페이지로 리디렉션
+4. **Server Error**: 전역 에러 상태 설정, 수동 재시도 버튼 제공
+
+### 13.11 성능 최적화 체크리스트
+
+**Provider Level**:
+- ✅ `useMemo`로 Context Value 메모이제이션
+- ✅ `useCallback`으로 모든 Action 함수 메모이제이션
+- ✅ WebSocket 이벤트 핸들러 메모이제이션
+- ✅ 불필요한 상태 변경 방지 (Immutable Update)
+
+**Component Level**:
+- ✅ `React.memo`로 ReactionButton 메모이제이션
+- ✅ Selector로 필요한 데이터만 구독
+- ✅ messageId 변경 시에만 리렌더링
+- ✅ Props 비교 함수 최적화
+
+**Data Structure**:
+- ✅ `Map<messageId, ReactionState>` 사용 (O(1) 조회)
+- ✅ 배열 대신 Map 사용으로 업데이트 성능 향상
+- ✅ Normalized State 구조
+
+### 13.12 디버깅 및 개발자 도구
+
+```typescript
+// Context에서 제공하는 디버깅 헬퍼
+export interface ReactionDebugAPI {
+  // 현재 상태 덤프
+  dumpState: () => void;
+
+  // 특정 메시지 상태 조회
+  inspectMessage: (messageId: number) => void;
+
+  // 액션 히스토리 (개발 모드만)
+  actionHistory: Array<{ type: string; timestamp: number; payload: any }>;
+
+  // 성능 메트릭
+  metrics: {
+    totalReactions: number;
+    pendingCount: number;
+    errorCount: number;
+    lastUpdateTime: number;
+  };
+}
+```
+
+**개발 환경에서만 활성화**:
+```typescript
+const contextValue = useMemo(() => ({
+  state,
+  actions,
+  selectors,
+  ...(process.env.NODE_ENV === 'development' && { debug: debugAPI }),
+}), [state, actions, selectors, debugAPI]);
+```
+
+### 13.13 마이그레이션 가이드 (useState → Context)
+
+**Before (useState 버전)**:
+```typescript
+// ReactionButton.tsx
+const [count, setCount] = useState(initialCount);
+const [isActive, setIsActive] = useState(initialIsActive);
+```
+
+**After (Context 버전)**:
+```typescript
+// ReactionButton.tsx
+const { selectors, actions } = useReactionContext();
+const count = selectors.getReactionCount(messageId);
+const isActive = selectors.hasUserReacted(messageId);
+```
+
+**변경 사항**:
+- ✅ Props drilling 제거
+- ✅ WebSocket 업데이트 자동 동기화
+- ✅ 중복 상태 제거 (단일 진실의 원천)
+- ✅ 테스트 용이성 향상
+
+---
+
+## 14. 변경 이력
 
 | 버전 | 날짜 | 작성자 | 변경 내용 |
 |------|------|--------|-----------|
+| 1.2  | 2025-10-17 | Claude | Context + useReducer 아키텍처 설계 추가 |
 | 1.1  | 2025-10-17 | Claude | Flux 패턴 시각화 및 useReducer 구현 추가 |
 | 1.0  | 2025-10-17 | Claude | 초기 작성 - 메시지 반응하기 상태관리 설계 |
 
