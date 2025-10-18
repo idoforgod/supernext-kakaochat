@@ -442,6 +442,640 @@ import { VariableSizeList } from 'react-window';
 
 ---
 
+---
+
+## 11. Flux 패턴 시각화 (Action → Store → View)
+
+### 11.1 메시지 전송 플로우 (Optimistic Update)
+
+```mermaid
+graph TD
+    A[User: 전송 버튼 클릭] -->|Action: SEND_MESSAGE_START| B[Reducer]
+    B --> C[Store State Update]
+    C --> D[isSending: true<br/>optimisticMessages: 추가]
+    D --> E[View: 임시 메시지 표시<br/>전송 버튼 비활성화]
+
+    E --> F[Side Effect: WebSocket emit]
+    F -->|성공| G[WS Event: new_message]
+    F -->|실패| H[WS Event: message_error]
+
+    G -->|Action: SEND_MESSAGE_SUCCESS| I[Reducer]
+    I --> J[Store State Update]
+    J --> K[isSending: false<br/>messageInput: ''<br/>optimisticMessages: 제거<br/>messages: 실제 메시지 추가]
+    K --> L[View: 실제 메시지로 교체<br/>입력 필드 초기화]
+
+    H -->|Action: SEND_MESSAGE_FAILURE| M[Reducer]
+    M --> N[Store State Update]
+    N --> O[isSending: false<br/>optimisticMessages: status=failed]
+    O --> P[View: 실패 상태 표시<br/>재전송 버튼]
+
+    style A fill:#e1f5ff
+    style E fill:#fff4e6
+    style L fill:#e7f5e7
+    style P fill:#ffe6e6
+```
+
+### 11.2 답장 플로우
+
+```mermaid
+graph TD
+    A[User: 답장 버튼 클릭] -->|Action: SET_REPLY_TARGET| B[Reducer]
+    B --> C[Store State Update]
+    C --> D[replyTarget: 원본 메시지 정보]
+    D --> E[View: 원본 메시지 미리보기<br/>입력 필드 포커스]
+
+    E --> F[User: 답장 내용 입력]
+    F -->|Action: UPDATE_MESSAGE_INPUT| G[Reducer]
+    G --> H[messageInput: 답장 내용]
+
+    H --> I[User: 전송 버튼 클릭]
+    I -->|Action: SEND_REPLY_MESSAGE| J[Reducer]
+    J --> K[isSending: true<br/>optimisticMessages: 추가]
+    K --> L[View: 임시 답장 표시]
+
+    L --> M[Side Effect: WebSocket emit<br/>parentMessageId 포함]
+    M -->|성공| N[WS Event: NEW_REPLY_MESSAGE]
+    N -->|Action: SEND_MESSAGE_SUCCESS| O[Reducer]
+    O --> P[replyTarget: null<br/>messageInput: ''<br/>messages: 답장 추가]
+    P --> Q[View: 실제 답장 표시<br/>미리보기 제거]
+
+    E --> R[User: X 버튼 또는 Esc]
+    R -->|Action: CLEAR_REPLY_TARGET| S[Reducer]
+    S --> T[replyTarget: null]
+    T --> U[View: 미리보기 제거]
+
+    style A fill:#e1f5ff
+    style E fill:#fff4e6
+    style Q fill:#e7f5e7
+    style U fill:#f0f0f0
+```
+
+### 11.3 반응 토글 플로우 (Optimistic Update)
+
+```mermaid
+graph TD
+    A[User: 좋아요 클릭] -->|Action: TOGGLE_REACTION_OPTIMISTIC| B[Reducer]
+    B --> C[Store State Update]
+    C --> D[messages: reaction count ±1<br/>userIds 추가/제거]
+    D --> E[View: 하트 아이콘 즉시 변경<br/>개수 애니메이션]
+
+    E --> F[Side Effect: WebSocket emit<br/>REACTION_TOGGLE]
+    F -->|성공| G[WS Event: REACTION_UPDATED]
+    G -->|Action: REACTION_CONFIRMED| H[Reducer]
+    H --> I[Store State Update]
+    I --> J[messages: 서버 값으로 확정]
+    J --> K[View: 최종 상태 유지]
+
+    F -->|실패| L[WS Event: error]
+    L -->|Action: REACTION_ROLLBACK| M[Reducer]
+    M --> N[messages: 이전 상태 복원]
+    N --> O[View: 롤백<br/>토스트 에러 표시]
+
+    style A fill:#e1f5ff
+    style E fill:#fff4e6
+    style K fill:#e7f5e7
+    style O fill:#ffe6e6
+```
+
+### 11.4 WebSocket 연결 상태 플로우
+
+```mermaid
+graph TD
+    A[Component Mount] -->|Action: WS_CONNECT_START| B[Reducer]
+    B --> C[wsConnectionStatus: 'disconnected']
+    C --> D[View: 연결 시도 중...]
+
+    D --> E[Side Effect: WebSocket connect]
+    E -->|성공| F[WS Event: connect]
+    F -->|Action: WS_CONNECTED| G[Reducer]
+    G --> H[wsConnectionStatus: 'connected']
+    H --> I[View: 초록색 아이콘<br/>채팅 활성화]
+
+    I --> J[Runtime: 네트워크 끊김]
+    J -->|Action: WS_DISCONNECTED| K[Reducer]
+    K --> L[wsConnectionStatus: 'disconnected']
+    L --> M[View: 빨간색 아이콘<br/>배너 표시]
+
+    M --> N[Side Effect: 자동 재연결 시도]
+    N -->|Action: WS_RECONNECTING| O[Reducer]
+    O --> P[wsConnectionStatus: 'reconnecting']
+    P --> Q[View: 노란색 아이콘<br/>'재연결 중...']
+
+    Q -->|성공| F
+    Q -->|실패| M
+
+    style A fill:#e1f5ff
+    style I fill:#e7f5e7
+    style M fill:#ffe6e6
+    style Q fill:#fff4e6
+```
+
+---
+
+## 12. useReducer 기반 상태 관리 구현
+
+### 12.1 상태 타입 정의
+
+```typescript
+// src/features/chat/types/state.ts
+
+import type { Message, ReplyTarget, MessageError } from './message';
+
+export type WSConnectionStatus = 'connected' | 'disconnected' | 'reconnecting';
+
+export interface ChatRoomState {
+  // 메시지 관련
+  messageInput: string;
+  isSending: boolean;
+  optimisticMessages: Message[];
+
+  // 답장 관련
+  replyTarget: ReplyTarget | null;
+
+  // WebSocket 연결
+  wsConnectionStatus: WSConnectionStatus;
+
+  // 스크롤 관련
+  isAtBottom: boolean;
+  showScrollToBottom: boolean;
+
+  // 에러 상태
+  error: MessageError | null;
+}
+
+export const initialState: ChatRoomState = {
+  messageInput: '',
+  isSending: false,
+  optimisticMessages: [],
+  replyTarget: null,
+  wsConnectionStatus: 'disconnected',
+  isAtBottom: true,
+  showScrollToBottom: false,
+  error: null,
+};
+```
+
+### 12.2 액션 타입 정의
+
+```typescript
+// src/features/chat/types/actions.ts
+
+import type { Message, ReplyTarget, MessageError } from './message';
+
+export type ChatRoomAction =
+  // 메시지 입력
+  | { type: 'UPDATE_MESSAGE_INPUT'; payload: string }
+  | { type: 'CLEAR_MESSAGE_INPUT' }
+
+  // 메시지 전송
+  | { type: 'SEND_MESSAGE_START'; payload: { message: Message } }
+  | { type: 'SEND_MESSAGE_SUCCESS'; payload: { tempId: string } }
+  | { type: 'SEND_MESSAGE_FAILURE'; payload: { tempId: string; error: MessageError } }
+
+  // 답장
+  | { type: 'SET_REPLY_TARGET'; payload: ReplyTarget }
+  | { type: 'CLEAR_REPLY_TARGET' }
+
+  // 반응 (Optimistic Update)
+  | { type: 'TOGGLE_REACTION_OPTIMISTIC'; payload: { messageId: number; userId: number } }
+  | { type: 'REACTION_CONFIRMED'; payload: { messageId: number; totalCount: number; userIds: number[] } }
+  | { type: 'REACTION_ROLLBACK'; payload: { messageId: number } }
+
+  // WebSocket 연결
+  | { type: 'WS_CONNECT_START' }
+  | { type: 'WS_CONNECTED' }
+  | { type: 'WS_DISCONNECTED' }
+  | { type: 'WS_RECONNECTING' }
+
+  // 스크롤
+  | { type: 'SET_IS_AT_BOTTOM'; payload: boolean }
+  | { type: 'SET_SHOW_SCROLL_TO_BOTTOM'; payload: boolean }
+
+  // 에러
+  | { type: 'SET_ERROR'; payload: MessageError | null }
+  | { type: 'CLEAR_ERROR' };
+```
+
+### 12.3 Reducer 함수
+
+```typescript
+// src/features/chat/reducers/chatRoomReducer.ts
+
+import type { ChatRoomState, ChatRoomAction } from '../types';
+
+export const chatRoomReducer = (
+  state: ChatRoomState,
+  action: ChatRoomAction
+): ChatRoomState => {
+  switch (action.type) {
+    // 메시지 입력
+    case 'UPDATE_MESSAGE_INPUT':
+      return {
+        ...state,
+        messageInput: action.payload,
+        error: null,
+      };
+
+    case 'CLEAR_MESSAGE_INPUT':
+      return {
+        ...state,
+        messageInput: '',
+      };
+
+    // 메시지 전송
+    case 'SEND_MESSAGE_START':
+      return {
+        ...state,
+        isSending: true,
+        optimisticMessages: [...state.optimisticMessages, action.payload.message],
+        error: null,
+      };
+
+    case 'SEND_MESSAGE_SUCCESS':
+      return {
+        ...state,
+        isSending: false,
+        messageInput: '',
+        replyTarget: null,
+        optimisticMessages: state.optimisticMessages.filter(
+          (msg) => msg._tempId !== action.payload.tempId
+        ),
+      };
+
+    case 'SEND_MESSAGE_FAILURE':
+      return {
+        ...state,
+        isSending: false,
+        optimisticMessages: state.optimisticMessages.map((msg) =>
+          msg._tempId === action.payload.tempId
+            ? { ...msg, _status: 'failed' as const }
+            : msg
+        ),
+        error: action.payload.error,
+      };
+
+    // 답장
+    case 'SET_REPLY_TARGET':
+      return {
+        ...state,
+        replyTarget: action.payload,
+      };
+
+    case 'CLEAR_REPLY_TARGET':
+      return {
+        ...state,
+        replyTarget: null,
+      };
+
+    // WebSocket 연결
+    case 'WS_CONNECT_START':
+      return {
+        ...state,
+        wsConnectionStatus: 'disconnected',
+      };
+
+    case 'WS_CONNECTED':
+      return {
+        ...state,
+        wsConnectionStatus: 'connected',
+        error: null,
+      };
+
+    case 'WS_DISCONNECTED':
+      return {
+        ...state,
+        wsConnectionStatus: 'disconnected',
+        error: { type: 'CONNECTION_LOST', message: '연결이 끊어졌습니다' },
+      };
+
+    case 'WS_RECONNECTING':
+      return {
+        ...state,
+        wsConnectionStatus: 'reconnecting',
+      };
+
+    // 스크롤
+    case 'SET_IS_AT_BOTTOM':
+      return {
+        ...state,
+        isAtBottom: action.payload,
+      };
+
+    case 'SET_SHOW_SCROLL_TO_BOTTOM':
+      return {
+        ...state,
+        showScrollToBottom: action.payload,
+      };
+
+    // 에러
+    case 'SET_ERROR':
+      return {
+        ...state,
+        error: action.payload,
+      };
+
+    case 'CLEAR_ERROR':
+      return {
+        ...state,
+        error: null,
+      };
+
+    default:
+      return state;
+  }
+};
+```
+
+### 12.4 커스텀 Hook 구현
+
+```typescript
+// src/features/chat/hooks/useChatRoomState.ts
+
+import { useReducer, useCallback, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { chatRoomReducer, initialState } from '../reducers/chatRoomReducer';
+import { useWebSocket } from './useWebSocket';
+import type { Message, ReplyTarget } from '../types';
+
+export const useChatRoomState = (roomId: string, currentUser: User) => {
+  const [state, dispatch] = useReducer(chatRoomReducer, initialState);
+  const queryClient = useQueryClient();
+  const ws = useWebSocket(roomId);
+
+  // WebSocket 연결 상태 동기화
+  useEffect(() => {
+    if (!ws) return;
+
+    const handleConnect = () => dispatch({ type: 'WS_CONNECTED' });
+    const handleDisconnect = () => dispatch({ type: 'WS_DISCONNECTED' });
+    const handleReconnecting = () => dispatch({ type: 'WS_RECONNECTING' });
+
+    ws.on('connect', handleConnect);
+    ws.on('disconnect', handleDisconnect);
+    ws.on('reconnecting', handleReconnecting);
+
+    return () => {
+      ws.off('connect', handleConnect);
+      ws.off('disconnect', handleDisconnect);
+      ws.off('reconnecting', handleReconnecting);
+    };
+  }, [ws]);
+
+  // 메시지 입력 핸들러
+  const updateMessageInput = useCallback((value: string) => {
+    dispatch({ type: 'UPDATE_MESSAGE_INPUT', payload: value });
+  }, []);
+
+  // 메시지 전송 핸들러 (Optimistic Update)
+  const sendMessage = useCallback(
+    async (content: string) => {
+      if (!ws || state.wsConnectionStatus !== 'connected') {
+        dispatch({
+          type: 'SET_ERROR',
+          payload: { type: 'CONNECTION_LOST', message: '서버와 연결되지 않았습니다' },
+        });
+        return;
+      }
+
+      const tempId = `temp-${Date.now()}-${Math.random()}`;
+      const optimisticMessage: Message = {
+        _tempId: tempId,
+        _status: 'sending',
+        room_id: Number(roomId),
+        user: currentUser,
+        content,
+        parent_message_id: state.replyTarget?.messageId ?? null,
+        parent_message: state.replyTarget ? {
+          id: state.replyTarget.messageId,
+          content: state.replyTarget.content,
+          user_nickname: state.replyTarget.userNickname,
+          created_at: state.replyTarget.createdAt,
+        } : null,
+        reactions: { like: { count: 0, userIds: [] } },
+        created_at: new Date().toISOString(),
+      } as Message;
+
+      // Optimistic Update
+      dispatch({
+        type: 'SEND_MESSAGE_START',
+        payload: { message: optimisticMessage },
+      });
+
+      try {
+        // WebSocket으로 전송
+        await ws.emit('send_message', {
+          roomId,
+          content,
+          parentMessageId: state.replyTarget?.messageId,
+        });
+
+        // 성공 처리는 WebSocket 이벤트 리스너에서 수행
+      } catch (error) {
+        dispatch({
+          type: 'SEND_MESSAGE_FAILURE',
+          payload: {
+            tempId,
+            error: {
+              type: 'SEND_FAILED',
+              message: '메시지 전송에 실패했습니다',
+              retryable: true,
+            },
+          },
+        });
+      }
+    },
+    [ws, state.wsConnectionStatus, state.replyTarget, roomId, currentUser]
+  );
+
+  // WebSocket 이벤트 리스너: 서버에서 메시지 수신
+  useEffect(() => {
+    if (!ws) return;
+
+    const handleNewMessage = (serverMessage: Message) => {
+      // Optimistic 메시지 찾기 및 제거
+      const matchingOptimistic = state.optimisticMessages.find(
+        (msg) =>
+          msg.content === serverMessage.content &&
+          Math.abs(
+            new Date(msg.created_at).getTime() -
+            new Date(serverMessage.created_at).getTime()
+          ) < 5000 // 5초 이내
+      );
+
+      if (matchingOptimistic?._tempId) {
+        dispatch({
+          type: 'SEND_MESSAGE_SUCCESS',
+          payload: { tempId: matchingOptimistic._tempId },
+        });
+      }
+
+      // React Query 캐시에 실제 메시지 추가
+      queryClient.setQueryData(['chatRoom', roomId, 'messages'], (old: Message[] = []) => {
+        return [...old, serverMessage];
+      });
+    };
+
+    const handleMessageError = (error: { code: string; message: string }) => {
+      // 가장 최근 optimistic 메시지를 실패 처리
+      const lastOptimistic = state.optimisticMessages[state.optimisticMessages.length - 1];
+      if (lastOptimistic?._tempId) {
+        dispatch({
+          type: 'SEND_MESSAGE_FAILURE',
+          payload: {
+            tempId: lastOptimistic._tempId,
+            error: {
+              type: 'SEND_FAILED',
+              message: error.message,
+              retryable: true,
+            },
+          },
+        });
+      }
+    };
+
+    ws.on('new_message', handleNewMessage);
+    ws.on('message_error', handleMessageError);
+
+    return () => {
+      ws.off('new_message', handleNewMessage);
+      ws.off('message_error', handleMessageError);
+    };
+  }, [ws, roomId, queryClient, state.optimisticMessages]);
+
+  // 답장 관련 핸들러
+  const setReplyTarget = useCallback((target: ReplyTarget) => {
+    dispatch({ type: 'SET_REPLY_TARGET', payload: target });
+  }, []);
+
+  const clearReplyTarget = useCallback(() => {
+    dispatch({ type: 'CLEAR_REPLY_TARGET' });
+  }, []);
+
+  // 스크롤 관련 핸들러
+  const setIsAtBottom = useCallback((isAtBottom: boolean) => {
+    dispatch({ type: 'SET_IS_AT_BOTTOM', payload: isAtBottom });
+  }, []);
+
+  const setShowScrollToBottom = useCallback((show: boolean) => {
+    dispatch({ type: 'SET_SHOW_SCROLL_TO_BOTTOM', payload: show });
+  }, []);
+
+  return {
+    state,
+    actions: {
+      updateMessageInput,
+      sendMessage,
+      setReplyTarget,
+      clearReplyTarget,
+      setIsAtBottom,
+      setShowScrollToBottom,
+    },
+  };
+};
+```
+
+### 12.5 컴포넌트에서 사용 예시
+
+```typescript
+// src/app/rooms/[roomId]/page.tsx
+
+'use client';
+
+import { useChatRoomState } from '@/features/chat/hooks/useChatRoomState';
+import { useQuery } from '@tanstack/react-query';
+import { MessageList } from '@/features/chat/components/MessageList';
+import { MessageInputArea } from '@/features/chat/components/MessageInputArea';
+
+export default function ChatRoomPage({ params }: { params: Promise<{ roomId: string }> }) {
+  const resolvedParams = use(params);
+  const { roomId } = resolvedParams;
+
+  // 서버 상태 (React Query)
+  const { data: messages = [], isLoading } = useQuery({
+    queryKey: ['chatRoom', roomId, 'messages'],
+    queryFn: () => fetchMessages(roomId),
+  });
+
+  const { data: currentUser } = useQuery({
+    queryKey: ['currentUser'],
+    queryFn: fetchCurrentUser,
+  });
+
+  // 클라이언트 상태 (useReducer)
+  const { state, actions } = useChatRoomState(roomId, currentUser);
+
+  // Derived State: 실제 메시지 + Optimistic 메시지 통합
+  const displayMessages = useMemo(() => {
+    return [...messages, ...state.optimisticMessages].sort(
+      (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+    );
+  }, [messages, state.optimisticMessages]);
+
+  // Enter 키 핸들러
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      if (state.messageInput.trim() && !state.isSending) {
+        actions.sendMessage(state.messageInput);
+      }
+    } else if (e.key === 'Escape' && state.replyTarget) {
+      actions.clearReplyTarget();
+    }
+  };
+
+  if (isLoading) return <div>Loading...</div>;
+
+  return (
+    <div className="flex h-screen flex-col">
+      {/* 연결 상태 배너 */}
+      {state.wsConnectionStatus !== 'connected' && (
+        <ConnectionBanner status={state.wsConnectionStatus} />
+      )}
+
+      {/* 메시지 목록 */}
+      <MessageList
+        messages={displayMessages}
+        currentUser={currentUser}
+        isAtBottom={state.isAtBottom}
+        onScroll={(atBottom) => actions.setIsAtBottom(atBottom)}
+      />
+
+      {/* 스크롤 버튼 */}
+      {state.showScrollToBottom && (
+        <ScrollToBottomButton onClick={() => {
+          scrollToBottom();
+          actions.setShowScrollToBottom(false);
+        }} />
+      )}
+
+      {/* 메시지 입력 영역 */}
+      <MessageInputArea
+        value={state.messageInput}
+        onChange={actions.updateMessageInput}
+        onSend={() => actions.sendMessage(state.messageInput)}
+        onKeyDown={handleKeyDown}
+        isSending={state.isSending}
+        isConnected={state.wsConnectionStatus === 'connected'}
+        replyTarget={state.replyTarget}
+        onClearReply={actions.clearReplyTarget}
+      />
+    </div>
+  );
+}
+```
+
+---
+
+## 13. 변경 이력
+
+| 버전 | 날짜 | 작성자 | 변경 내용 |
+|------|------|--------|-----------|
+| 1.1  | 2025-10-17 | Claude | Flux 패턴 시각화 추가 (mermaid 다이어그램) |
+| 1.1  | 2025-10-17 | Claude | useReducer 기반 상태 관리 코드 추가 |
+| 1.0  | 2025-10-17 | Claude | 초기 작성 - 채팅방 페이지 상태관리 설계 |
+
+---
+
 ## 참고 문서
 - [UC-005: 메시지 전송하기](../usecases/005-send-message.md)
 - [UC-006: 메시지에 답장하기](../usecases/006-reply-to-message.md)
