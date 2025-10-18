@@ -1,6 +1,7 @@
 export type CurrentUser = {
   id: string;
   email: string | null;
+  nickname: string;
   appMetadata: Record<string, unknown>;
   userMetadata: Record<string, unknown>;
 };
