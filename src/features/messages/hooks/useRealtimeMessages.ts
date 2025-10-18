@@ -7,16 +7,26 @@ import type { Message } from '@/features/messages/lib/dto';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
+interface ReactionUpdate {
+  messageId: number;
+  reactionCount: number;
+  hasUserReacted: boolean;
+}
+
 interface UseRealtimeMessagesParams {
   roomId: number;
+  currentUserId?: number;
   onNewMessage: (message: Message) => void;
   onUpdateMessage: (message: Message) => void;
+  onReactionUpdate?: (update: ReactionUpdate) => void;
 }
 
 export function useRealtimeMessages({
   roomId,
+  currentUserId,
   onNewMessage,
   onUpdateMessage,
+  onReactionUpdate,
 }: UseRealtimeMessagesParams) {
   useEffect(() => {
     if (!roomId || isNaN(roomId) || roomId <= 0) {
@@ -118,10 +128,60 @@ export function useRealtimeMessages({
           }
         }
       )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'message_reactions',
+        },
+        async (payload) => {
+          if (!onReactionUpdate) return;
+
+          // INSERT 또는 DELETE된 반응의 메시지 ID
+          const messageId = (payload.new as any)?.message_id || (payload.old as any)?.message_id;
+
+          if (!messageId) return;
+
+          // 해당 메시지가 현재 채팅방의 메시지인지 확인
+          const { data: messageData } = await supabase
+            .from('messages')
+            .select('room_id')
+            .eq('id', messageId)
+            .single();
+
+          if (!messageData || messageData.room_id !== roomId) return;
+
+          // 총 반응 개수 조회
+          const { count: reactionCount } = await supabase
+            .from('message_reactions')
+            .select('*', { count: 'exact', head: true })
+            .eq('message_id', messageId);
+
+          // 현재 사용자의 반응 여부 조회
+          let hasUserReacted = false;
+          if (currentUserId) {
+            const { data: userReaction } = await supabase
+              .from('message_reactions')
+              .select('*')
+              .eq('message_id', messageId)
+              .eq('user_id', currentUserId)
+              .maybeSingle();
+
+            hasUserReacted = !!userReaction;
+          }
+
+          onReactionUpdate({
+            messageId,
+            reactionCount: reactionCount || 0,
+            hasUserReacted,
+          });
+        }
+      )
       .subscribe();
 
     return () => {
       channel.unsubscribe();
     };
-  }, [roomId, onNewMessage, onUpdateMessage]);
+  }, [roomId, currentUserId, onNewMessage, onUpdateMessage, onReactionUpdate]);
 }

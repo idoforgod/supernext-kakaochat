@@ -10,6 +10,7 @@ import { MessageList } from '@/features/messages/components/MessageList';
 import { MessageInput } from '@/features/messages/components/MessageInput';
 import { useToast } from '@/hooks/use-toast';
 import { MESSAGE_UI_TEXT } from '@/features/messages/constants/text';
+import { useCurrentUser } from '@/features/auth/hooks/useCurrentUser';
 import type { Message } from '@/features/messages/lib/dto';
 
 export default function RoomPage({
@@ -21,6 +22,8 @@ export default function RoomPage({
   const roomId = parseInt(resolvedParams.id, 10);
   const router = useRouter();
   const { toast } = useToast();
+  const { user } = useCurrentUser();
+  const currentUserId = user?.id;
   const [localMessages, setLocalMessages] = useState<Message[]>([]);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -85,11 +88,24 @@ export default function RoomPage({
     setReplyingTo(null);
   }, []);
 
+  // 반응 업데이트 핸들러
+  const handleReactionUpdate = useCallback((update: { messageId: number; reactionCount: number; hasUserReacted: boolean }) => {
+    setLocalMessages((prev) =>
+      prev.map((m) =>
+        m.id === update.messageId
+          ? { ...m, reactionCount: update.reactionCount, hasUserReacted: update.hasUserReacted }
+          : m
+      )
+    );
+  }, []);
+
   // Realtime 구독
   useRealtimeMessages({
     roomId,
+    currentUserId: currentUserId ? parseInt(currentUserId, 10) : undefined,
     onNewMessage: handleNewMessage,
     onUpdateMessage: handleUpdateMessage,
+    onReactionUpdate: handleReactionUpdate,
   });
 
   // 스크롤 자동 이동
@@ -163,7 +179,7 @@ export default function RoomPage({
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto bg-gray-50">
-        <MessageList messages={localMessages} onReply={handleReply} />
+        <MessageList messages={localMessages} currentUserId={currentUserId} onReply={handleReply} />
         <div ref={messagesEndRef} />
       </div>
 
