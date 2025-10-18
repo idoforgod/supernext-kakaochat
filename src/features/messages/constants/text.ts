@@ -35,4 +35,11 @@ export const MESSAGE_UI_TEXT = {
   ERROR_SEND_FAILED: '메시지 전송에 실패했습니다. 다시 시도해주세요.',
   ERROR_MESSAGE_TOO_LONG: '메시지가 너무 깁니다. 2000자 이내로 작성해주세요.',
   ERROR_MESSAGE_EMPTY: '메시지 내용을 입력해주세요.',
+  ERROR_PARENT_MESSAGE_NOT_FOUND: '답장하려는 메시지를 찾을 수 없습니다.',
+  ERROR_INVALID_PARENT_MESSAGE: '유효하지 않은 원본 메시지입니다.',
+
+  // Reply
+  REPLY_TO: '님에게 답장',
+  REPLY_CANCEL: '취소',
+  REPLYING_TO: '답장 대상',
 } as const;

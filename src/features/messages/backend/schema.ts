@@ -60,6 +60,7 @@ export const SendMessageBodySchema = z.object({
     .refine((val) => val.length > 0, {
       message: '메시지 내용은 공백만으로 구성될 수 없습니다.',
     }),
+  parentMessageId: z.number().int().positive().optional(),
 });
 
 export const SendMessageResponseSchema = z.object({

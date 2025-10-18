@@ -51,7 +51,7 @@ export const messageRoute = new Hono<AppEnv>()
     authMiddleware,
     zValidator('json', SendMessageBodySchema),
     async (c) => {
-      const { roomId, content } = c.req.valid('json');
+      const { roomId, content, parentMessageId } = c.req.valid('json');
       const userIdStr = c.get('userId');
 
       if (!userIdStr) {
@@ -83,7 +83,7 @@ export const messageRoute = new Hono<AppEnv>()
       }
 
       const result = await sendMessageService(
-        { roomId, content, userId },
+        { roomId, content, userId, parentMessageId },
         c
       );
 

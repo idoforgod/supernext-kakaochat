@@ -22,6 +22,7 @@ export default function RoomPage({
   const router = useRouter();
   const { toast } = useToast();
   const [localMessages, setLocalMessages] = useState<Message[]>([]);
+  const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // 유효성 검증
@@ -72,6 +73,16 @@ export default function RoomPage({
     setLocalMessages((prev) =>
       prev.map((m) => (m.id === message.id ? message : m))
     );
+  }, []);
+
+  // 답장 핸들러
+  const handleReply = useCallback((message: Message) => {
+    setReplyingTo(message);
+  }, []);
+
+  // 답장 취소 핸들러
+  const handleCancelReply = useCallback(() => {
+    setReplyingTo(null);
   }, []);
 
   // Realtime 구독
@@ -152,12 +163,16 @@ export default function RoomPage({
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto bg-gray-50">
-        <MessageList messages={localMessages} />
+        <MessageList messages={localMessages} onReply={handleReply} />
         <div ref={messagesEndRef} />
       </div>
 
       {/* Message Input */}
-      <MessageInput roomId={roomId} />
+      <MessageInput
+        roomId={roomId}
+        replyingTo={replyingTo}
+        onCancelReply={handleCancelReply}
+      />
     </div>
   );
 }

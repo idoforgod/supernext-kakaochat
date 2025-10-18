@@ -15,6 +15,7 @@ export interface SendMessageParams {
   roomId: number;
   content: string;
   userId: number;
+  parentMessageId?: number;
 }
 
 export async function getMessagesService(
@@ -99,7 +100,7 @@ export async function sendMessageService(
   params: SendMessageParams,
   c: AppContext
 ): Promise<HandlerResult<Message, string>> {
-  const { roomId, content, userId } = params;
+  const { roomId, content, userId, parentMessageId } = params;
   const supabase = c.get('supabase');
   const logger = c.get('logger');
 
@@ -120,14 +121,42 @@ export async function sendMessageService(
       );
     }
 
-    // 2. 메시지 저장
+    // 2. 원본 메시지 존재 여부 확인 (답장인 경우)
+    if (parentMessageId) {
+      const { data: parentMessage, error: parentError } = await supabase
+        .from('messages')
+        .select('id, room_id')
+        .eq('id', parentMessageId)
+        .maybeSingle();
+
+      if (parentError || !parentMessage) {
+        logger.error('Parent message not found', { parentMessageId, error: parentError });
+        return failure(
+          MessageErrorCode.PARENT_MESSAGE_NOT_FOUND.statusCode,
+          MessageErrorCode.PARENT_MESSAGE_NOT_FOUND.code,
+          MessageErrorCode.PARENT_MESSAGE_NOT_FOUND.message
+        );
+      }
+
+      // 원본 메시지와 동일한 채팅방인지 확인
+      if (parentMessage.room_id !== roomId) {
+        logger.error('Parent message room mismatch', { parentMessageId, roomId, parentRoomId: parentMessage.room_id });
+        return failure(
+          MessageErrorCode.INVALID_PARENT_MESSAGE.statusCode,
+          MessageErrorCode.INVALID_PARENT_MESSAGE.code,
+          MessageErrorCode.INVALID_PARENT_MESSAGE.message
+        );
+      }
+    }
+
+    // 3. 메시지 저장
     const { data: messageData, error: insertError } = await supabase
       .from('messages')
       .insert({
         room_id: roomId,
         user_id: userId,
         content: content.trim(),
-        parent_message_id: null,
+        parent_message_id: parentMessageId || null,
       })
       .select(
         `
@@ -150,7 +179,7 @@ export async function sendMessageService(
       );
     }
 
-    // 3. 사용자 정보 조회
+    // 4. 사용자 정보 조회
     const { data: userData, error: userError } = await supabase
       .from('users')
       .select('id, nickname')
@@ -166,7 +195,7 @@ export async function sendMessageService(
       );
     }
 
-    // 4. 완전한 메시지 객체 생성
+    // 5. 완전한 메시지 객체 생성
     const message: Message = {
       id: messageData.id,
       roomId: messageData.room_id,

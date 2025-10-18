@@ -38,6 +38,20 @@ export const MessageErrorCode = {
     message: '메시지 전송에 실패했습니다. 잠시 후 다시 시도해주세요.',
   },
 
+  // 원본 메시지를 찾을 수 없음 (404)
+  PARENT_MESSAGE_NOT_FOUND: {
+    code: 'PARENT_MESSAGE_NOT_FOUND',
+    statusCode: 404,
+    message: '답장하려는 메시지를 찾을 수 없습니다.',
+  },
+
+  // 유효하지 않은 원본 메시지 (400)
+  INVALID_PARENT_MESSAGE: {
+    code: 'INVALID_PARENT_MESSAGE',
+    statusCode: 400,
+    message: '유효하지 않은 원본 메시지입니다.',
+  },
+
   // 서버 내부 오류 (500)
   INTERNAL_SERVER_ERROR: {
     code: 'INTERNAL_SERVER_ERROR',

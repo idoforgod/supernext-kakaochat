@@ -7,12 +7,16 @@ import { useSendMessage } from '@/features/messages/hooks/useSendMessage';
 import { useToast } from '@/hooks/use-toast';
 import { MESSAGE_UI_TEXT } from '@/features/messages/constants/text';
 import { MESSAGE_CONTENT_MAX_LENGTH } from '@/features/messages/constants/validation';
+import { ReplyPreview } from './ReplyPreview';
+import type { Message } from '@/features/messages/lib/dto';
 
 interface MessageInputProps {
   roomId: number;
+  replyingTo: Message | null;
+  onCancelReply: () => void;
 }
 
-export function MessageInput({ roomId }: MessageInputProps) {
+export function MessageInput({ roomId, replyingTo, onCancelReply }: MessageInputProps) {
   const [content, setContent] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { toast } = useToast();
@@ -39,10 +43,12 @@ export function MessageInput({ roomId }: MessageInputProps) {
       await sendMessageMutation.mutateAsync({
         roomId,
         content: trimmedContent,
+        parentMessageId: replyingTo?.id,
       });
 
-      // 전송 성공 시 입력 필드 초기화
+      // 전송 성공 시 입력 필드 초기화 및 답장 모드 해제
       setContent('');
+      onCancelReply();
 
       // 포커스 유지
       if (textareaRef.current) {
@@ -60,6 +66,10 @@ export function MessageInput({ roomId }: MessageInputProps) {
         errorMessage = MESSAGE_UI_TEXT.ERROR_ROOM_NOT_FOUND;
       } else if (errorCode === 'UNAUTHORIZED') {
         errorMessage = MESSAGE_UI_TEXT.ERROR_UNAUTHORIZED;
+      } else if (errorCode === 'PARENT_MESSAGE_NOT_FOUND') {
+        errorMessage = MESSAGE_UI_TEXT.ERROR_PARENT_MESSAGE_NOT_FOUND;
+      } else if (errorCode === 'INVALID_PARENT_MESSAGE') {
+        errorMessage = MESSAGE_UI_TEXT.ERROR_INVALID_PARENT_MESSAGE;
       }
 
       toast({
@@ -81,6 +91,13 @@ export function MessageInput({ roomId }: MessageInputProps) {
 
   return (
     <div className="bg-white border-t px-6 py-4">
+      {/* 답장 프리뷰 */}
+      {replyingTo && (
+        <div className="mb-3">
+          <ReplyPreview parentMessage={replyingTo} onCancel={onCancelReply} />
+        </div>
+      )}
+
       <div className="flex gap-2 items-end">
         <Textarea
           ref={textareaRef}

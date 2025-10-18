@@ -7,6 +7,7 @@ import type { Message } from '@/features/messages/lib/dto';
 interface SendMessageParams {
   roomId: number;
   content: string;
+  parentMessageId?: number;
 }
 
 interface SendMessageResponse {
