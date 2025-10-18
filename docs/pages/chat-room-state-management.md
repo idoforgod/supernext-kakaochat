@@ -1066,10 +1066,559 @@ export default function ChatRoomPage({ params }: { params: Promise<{ roomId: str
 
 ---
 
-## 13. 변경 이력
+---
+
+## 13. Context + useReducer 아키텍처 설계
+
+### 13.1 Context 계층 구조
+
+채팅방 상태를 Context로 관리하기 위한 계층 구조:
+
+```
+App
+└─ ChatRoomProvider (Context Provider)
+   ├─ State: useReducer로 관리
+   ├─ WebSocket 연결 관리
+   ├─ React Query 통합
+   └─ 하위 컴포넌트들
+      ├─ ChatRoomPage
+      ├─ MessageList
+      ├─ MessageInputArea
+      └─ 기타 컴포넌트들
+```
+
+### 13.2 Context 데이터 흐름 시각화
+
+```mermaid
+graph TD
+    subgraph "ChatRoomProvider (Context)"
+        A[Provider Mount] --> B[useReducer 초기화]
+        B --> C[WebSocket 연결]
+        B --> D[React Query 구독]
+
+        C --> E{WebSocket 이벤트}
+        D --> F{서버 데이터 로드}
+
+        E -->|new_message| G[dispatch: 메시지 추가]
+        E -->|REACTION_UPDATED| H[dispatch: 반응 업데이트]
+        E -->|connect/disconnect| I[dispatch: 연결 상태 변경]
+
+        F -->|초기 메시지 로드| J[React Query Cache]
+        J --> K[Context State와 동기화]
+
+        G --> L[State 업데이트]
+        H --> L
+        I --> L
+        K --> L
+
+        L --> M[Context Value 갱신]
+    end
+
+    subgraph "Consumer Components"
+        M --> N[useChatRoom Hook]
+        N --> O[MessageList]
+        N --> P[MessageInputArea]
+        N --> Q[ChatRoomHeader]
+        N --> R[기타 컴포넌트]
+    end
+
+    O --> S[User Action: 스크롤]
+    P --> T[User Action: 메시지 입력/전송]
+    Q --> U[User Action: 없음, 읽기 전용]
+
+    S -->|dispatch| L
+    T -->|dispatch| L
+
+    style A fill:#e1f5ff
+    style L fill:#fff4e6
+    style M fill:#e7f5e7
+    style N fill:#f0e6ff
+```
+
+### 13.3 Context가 제공하는 인터페이스
+
+#### 13.3.1 State 인터페이스 (읽기 전용)
+
+Context에서 하위 컴포넌트에 노출하는 상태 값들:
+
+```typescript
+interface ChatRoomContextState {
+  // 메시지 관련 상태
+  messageInput: string;
+  isSending: boolean;
+  optimisticMessages: Message[];
+
+  // 답장 관련 상태
+  replyTarget: ReplyTarget | null;
+
+  // WebSocket 연결 상태
+  wsConnectionStatus: WSConnectionStatus;
+
+  // 스크롤 관련 상태
+  isAtBottom: boolean;
+  showScrollToBottom: boolean;
+
+  // 에러 상태
+  error: MessageError | null;
+
+  // 서버 상태 (React Query에서 가져온 데이터)
+  messages: Message[];          // 실제 메시지 목록
+  isLoadingMessages: boolean;   // 메시지 로딩 중
+  chatRoom: ChatRoom | null;    // 채팅방 정보
+  currentUser: User | null;     // 현재 사용자
+}
+```
+
+**특징**:
+- 모든 필드는 읽기 전용
+- 상태 변경은 반드시 Actions를 통해서만 가능
+- 서버 상태와 클라이언트 상태를 통합하여 제공
+
+#### 13.3.2 Actions 인터페이스 (상태 변경 함수)
+
+Context에서 하위 컴포넌트에 노출하는 액션 함수들:
+
+```typescript
+interface ChatRoomContextActions {
+  // 메시지 입력 관련
+  updateMessageInput: (value: string) => void;
+  clearMessageInput: () => void;
+
+  // 메시지 전송 관련
+  sendMessage: (content: string) => Promise<void>;
+  retrySendMessage: (tempId: string) => Promise<void>;
+
+  // 답장 관련
+  setReplyTarget: (target: ReplyTarget) => void;
+  clearReplyTarget: () => void;
+
+  // 반응 관련
+  toggleReaction: (messageId: number) => Promise<void>;
+
+  // 스크롤 관련
+  setIsAtBottom: (isAtBottom: boolean) => void;
+  setShowScrollToBottom: (show: boolean) => void;
+  scrollToBottom: () => void;
+
+  // 에러 관련
+  clearError: () => void;
+
+  // WebSocket 관련 (주로 내부 사용, 필요시 노출)
+  reconnectWebSocket: () => void;
+}
+```
+
+**특징**:
+- 모든 함수는 불변성을 유지하는 순수 함수
+- 비동기 작업은 Promise 반환
+- 함수명은 명령형 동사로 시작 (update, send, set, clear 등)
+
+#### 13.3.3 Computed Values (계산된 값)
+
+Context에서 제공하는 파생 상태 (Derived State):
+
+```typescript
+interface ChatRoomContextComputed {
+  // 화면에 표시할 최종 메시지 목록 (실제 + Optimistic)
+  displayMessages: Message[];
+
+  // 전송 버튼 활성화 여부
+  canSendMessage: boolean;
+
+  // 현재 입력 중인 메시지의 줄 수
+  messageInputLineCount: number;
+
+  // WebSocket 연결 상태 텍스트
+  connectionStatusText: string;
+
+  // 연결 상태 아이콘 색상
+  connectionStatusColor: 'green' | 'yellow' | 'red';
+}
+```
+
+**특징**:
+- 모두 useMemo로 계산되어 불필요한 재계산 방지
+- State와 분리하여 명확한 데이터 흐름 유지
+
+#### 13.3.4 통합된 Context Value
+
+최종적으로 Context에서 제공하는 전체 값:
+
+```typescript
+interface ChatRoomContextValue {
+  // 상태
+  state: ChatRoomContextState;
+
+  // 액션
+  actions: ChatRoomContextActions;
+
+  // 계산된 값
+  computed: ChatRoomContextComputed;
+}
+```
+
+### 13.4 Provider 내부 구조 설계
+
+#### 13.4.1 Provider 초기화 흐름
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant Provider as ChatRoomProvider
+    participant Reducer as useReducer
+    participant WS as WebSocket Client
+    participant RQ as React Query
+
+    App->>Provider: Mount with roomId
+    Provider->>Reducer: 초기 상태 설정
+    Reducer-->>Provider: initialState 반환
+
+    Provider->>RQ: useQuery (messages, chatRoom, user)
+    RQ-->>Provider: 서버 데이터 로드
+
+    Provider->>WS: connectWebSocket(roomId)
+    WS-->>Provider: 연결 성공 이벤트
+    Provider->>Reducer: dispatch(WS_CONNECTED)
+
+    Provider->>WS: 이벤트 리스너 등록
+    Note over Provider,WS: new_message, REACTION_UPDATED 등
+
+    Provider-->>App: Context Value 제공
+
+    loop Runtime
+        WS->>Provider: 실시간 이벤트 수신
+        Provider->>Reducer: dispatch(액션)
+        Reducer-->>Provider: 새로운 상태
+        Provider-->>App: Context Value 갱신
+    end
+```
+
+#### 13.4.2 데이터 동기화 전략
+
+**React Query ↔ Context State 동기화**:
+
+```mermaid
+graph LR
+    subgraph "React Query (서버 상태)"
+        A[messages Cache]
+        B[chatRoom Cache]
+        C[currentUser Cache]
+    end
+
+    subgraph "Context Provider"
+        D[useQuery 구독]
+        E[Context State에 매핑]
+    end
+
+    subgraph "WebSocket"
+        F[new_message 이벤트]
+        G[REACTION_UPDATED 이벤트]
+    end
+
+    A -->|실시간 동기화| D
+    B --> D
+    C --> D
+    D --> E
+
+    F -->|queryClient.setQueryData| A
+    G -->|queryClient.setQueryData| A
+
+    E --> H[Context Value]
+    H --> I[하위 컴포넌트들]
+
+    style A fill:#e1f5ff
+    style E fill:#fff4e6
+    style H fill:#e7f5e7
+```
+
+**동기화 규칙**:
+1. **서버 상태 (React Query)**:
+   - `messages`: WebSocket 이벤트로 실시간 업데이트
+   - `chatRoom`, `currentUser`: 최초 로드 후 불변
+
+2. **클라이언트 상태 (useReducer)**:
+   - `optimisticMessages`: 전송 중인 임시 메시지
+   - `messageInput`, `replyTarget`: 순수 UI 상태
+
+3. **통합 상태 (Context)**:
+   - `displayMessages = [...messages, ...optimisticMessages]`
+   - React Query 데이터를 Context State에 통합하여 제공
+
+### 13.5 컴포넌트별 Context 사용 패턴
+
+#### 13.5.1 MessageList 컴포넌트
+
+**필요한 State**:
+- `computed.displayMessages` (읽기)
+- `state.currentUser` (읽기)
+- `state.isAtBottom` (읽기)
+
+**필요한 Actions**:
+- `actions.setIsAtBottom` (스크롤 위치 업데이트)
+- `actions.setReplyTarget` (답장 버튼 클릭)
+- `actions.toggleReaction` (좋아요 클릭)
+
+**사용 예시**:
+```typescript
+function MessageList() {
+  const { state, actions, computed } = useChatRoom();
+
+  return (
+    <div onScroll={handleScroll}>
+      {computed.displayMessages.map((message) => (
+        <MessageItem
+          key={message.id}
+          message={message}
+          isOwnMessage={message.user.id === state.currentUser?.id}
+          onReply={() => actions.setReplyTarget({
+            messageId: message.id,
+            content: message.content,
+            userNickname: message.user.nickname,
+            createdAt: message.created_at,
+          })}
+          onReact={() => actions.toggleReaction(message.id)}
+        />
+      ))}
+    </div>
+  );
+}
+```
+
+#### 13.5.2 MessageInputArea 컴포넌트
+
+**필요한 State**:
+- `state.messageInput` (읽기)
+- `state.isSending` (읽기)
+- `state.replyTarget` (읽기)
+- `computed.canSendMessage` (읽기)
+
+**필요한 Actions**:
+- `actions.updateMessageInput` (입력 변경)
+- `actions.sendMessage` (전송)
+- `actions.clearReplyTarget` (답장 취소)
+
+**사용 예시**:
+```typescript
+function MessageInputArea() {
+  const { state, actions, computed } = useChatRoom();
+
+  return (
+    <div>
+      {state.replyTarget && (
+        <ReplyPreview
+          target={state.replyTarget}
+          onClear={actions.clearReplyTarget}
+        />
+      )}
+      <textarea
+        value={state.messageInput}
+        onChange={(e) => actions.updateMessageInput(e.target.value)}
+      />
+      <button
+        disabled={!computed.canSendMessage}
+        onClick={() => actions.sendMessage(state.messageInput)}
+      >
+        {state.isSending ? '전송 중...' : '전송'}
+      </button>
+    </div>
+  );
+}
+```
+
+#### 13.5.3 ChatRoomHeader 컴포넌트
+
+**필요한 State**:
+- `state.chatRoom` (읽기)
+- `state.wsConnectionStatus` (읽기)
+- `computed.connectionStatusText` (읽기)
+- `computed.connectionStatusColor` (읽기)
+
+**필요한 Actions**:
+- `actions.reconnectWebSocket` (재연결 버튼, 선택사항)
+
+**사용 예시**:
+```typescript
+function ChatRoomHeader() {
+  const { state, computed } = useChatRoom();
+
+  return (
+    <header>
+      <h1>{state.chatRoom?.name}</h1>
+      <ConnectionStatus
+        status={state.wsConnectionStatus}
+        text={computed.connectionStatusText}
+        color={computed.connectionStatusColor}
+      />
+    </header>
+  );
+}
+```
+
+### 13.6 Context 최적화 전략
+
+#### 13.6.1 Context 분리 전략
+
+성능 최적화를 위해 Context를 용도별로 분리할 수 있음:
+
+```typescript
+// 옵션 1: 단일 Context (간단, 권장)
+ChatRoomContext = { state, actions, computed }
+
+// 옵션 2: 분리된 Context (최적화 필요 시)
+ChatRoomStateContext = { state, computed }
+ChatRoomActionsContext = { actions }
+```
+
+**분리 시 장점**:
+- Actions만 필요한 컴포넌트는 State 변경 시 리렌더링 안 됨
+- 더 세밀한 리렌더링 제어 가능
+
+**분리 시 단점**:
+- 복잡도 증가
+- 2개의 Provider 필요
+
+**권장사항**: 초기에는 단일 Context로 시작, 성능 문제 발생 시 분리 고려
+
+#### 13.6.2 Selector 패턴 (선택적)
+
+특정 상태만 구독하는 패턴:
+
+```typescript
+// Context에서 특정 값만 선택
+function useMessageInput() {
+  const { state, actions } = useChatRoom();
+  return {
+    value: state.messageInput,
+    onChange: actions.updateMessageInput,
+  };
+}
+
+// 사용
+function SomeComponent() {
+  const messageInput = useMessageInput();
+  // state.messageInput 변경 시에만 리렌더링
+}
+```
+
+#### 13.6.3 메모이제이션 전략
+
+Context Value를 useMemo로 메모이제이션:
+
+```typescript
+const contextValue = useMemo(
+  () => ({
+    state,
+    actions,
+    computed,
+  }),
+  [state, actions, computed] // 의존성 배열
+);
+```
+
+**computed 값들도 개별적으로 메모이제이션**:
+```typescript
+const displayMessages = useMemo(
+  () => [...messages, ...state.optimisticMessages].sort(...),
+  [messages, state.optimisticMessages]
+);
+
+const canSendMessage = useMemo(
+  () =>
+    state.messageInput.trim().length > 0 &&
+    !state.isSending &&
+    state.wsConnectionStatus === 'connected',
+  [state.messageInput, state.isSending, state.wsConnectionStatus]
+);
+```
+
+### 13.7 에러 경계 (Error Boundary) 통합
+
+Context Provider를 Error Boundary로 감싸기:
+
+```
+App
+└─ ChatRoomErrorBoundary
+   └─ ChatRoomProvider
+      └─ 하위 컴포넌트들
+```
+
+**에러 처리 전략**:
+1. WebSocket 연결 실패 → Context State의 `error` 필드에 저장
+2. 메시지 전송 실패 → Optimistic 메시지를 `failed` 상태로 변경
+3. React Query 에러 → Error Boundary에서 캐치하여 에러 페이지 표시
+
+### 13.8 Provider Props 인터페이스
+
+```typescript
+interface ChatRoomProviderProps {
+  // 필수 Props
+  roomId: string;
+  children: React.ReactNode;
+
+  // 선택적 Props
+  initialMessages?: Message[];      // SSR 시 초기 데이터
+  onError?: (error: Error) => void; // 에러 콜백
+  enableOptimisticUpdates?: boolean; // Optimistic Update 활성화 (기본: true)
+  reconnectAttempts?: number;        // WebSocket 재연결 시도 횟수 (기본: 5)
+}
+```
+
+### 13.9 Context Hook 인터페이스
+
+```typescript
+// 기본 Hook
+function useChatRoom(): ChatRoomContextValue;
+
+// Selector Hook (선택적)
+function useChatRoomState(): ChatRoomContextState;
+function useChatRoomActions(): ChatRoomContextActions;
+function useChatRoomComputed(): ChatRoomContextComputed;
+
+// 특정 상태만 구독하는 Hook들
+function useMessageInput(): { value: string; onChange: (v: string) => void };
+function useReplyTarget(): { target: ReplyTarget | null; set: (t: ReplyTarget) => void; clear: () => void };
+function useConnectionStatus(): { status: WSConnectionStatus; isConnected: boolean };
+```
+
+### 13.10 디렉토리 구조
+
+```
+src/features/chat/
+├── context/
+│   ├── ChatRoomContext.tsx          # Context 정의 및 Provider
+│   ├── useChatRoom.ts               # 기본 Hook
+│   └── selectors.ts                 # Selector Hooks (선택적)
+│
+├── reducers/
+│   ├── chatRoomReducer.ts           # Reducer 함수
+│   ├── actions.ts                   # Action Creators
+│   └── initialState.ts              # 초기 상태
+│
+├── types/
+│   ├── state.ts                     # State 타입
+│   ├── actions.ts                   # Action 타입
+│   ├── context.ts                   # Context 타입
+│   └── message.ts                   # 메시지 관련 타입
+│
+├── hooks/
+│   ├── useWebSocket.ts              # WebSocket Hook
+│   ├── useChatRoomQuery.ts          # React Query Hook
+│   └── useScrollManagement.ts       # 스크롤 관리 Hook
+│
+└── components/
+    ├── ChatRoomPage.tsx
+    ├── MessageList.tsx
+    ├── MessageInputArea.tsx
+    └── ...
+```
+
+---
+
+## 14. 변경 이력
 
 | 버전 | 날짜 | 작성자 | 변경 내용 |
 |------|------|--------|-----------|
+| 1.2  | 2025-10-17 | Claude | Context + useReducer 아키텍처 설계 추가 |
 | 1.1  | 2025-10-17 | Claude | Flux 패턴 시각화 추가 (mermaid 다이어그램) |
 | 1.1  | 2025-10-17 | Claude | useReducer 기반 상태 관리 코드 추가 |
 | 1.0  | 2025-10-17 | Claude | 초기 작성 - 채팅방 페이지 상태관리 설계 |
