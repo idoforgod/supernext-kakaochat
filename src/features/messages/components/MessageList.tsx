@@ -30,6 +30,8 @@ export function MessageList({ messages, currentUserId, onReply }: MessageListPro
       {messages.map((message) => {
         const isOwnMessage = currentUserId && message.userId.toString() === currentUserId;
         const parentMessage = getParentMessage(message.parentMessageId);
+        // Optimistic 메시지 여부 확인 (id가 string이면 임시 메시지)
+        const isOptimistic = typeof message.id === 'string';
 
         return (
           <div
@@ -41,7 +43,7 @@ export function MessageList({ messages, currentUserId, onReply }: MessageListPro
                 isOwnMessage
                   ? 'bg-primary text-white'
                   : 'bg-gray-100 text-gray-900'
-              }`}
+              } ${isOptimistic ? 'opacity-60' : ''}`}
             >
               {!isOwnMessage && (
                 <p className="text-xs font-semibold mb-1">{message.user.nickname}</p>
